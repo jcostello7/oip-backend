@@ -1,21 +1,21 @@
 """
-OIP Backend — Step 2: Real auth
+OIP Backend — Step 3 (checkpoint 1): database connection
 
-Adds a single-password login gate:
-  - PBKDF2-hashed password (never stored or sent in plaintext once set up)
-  - A signed, expiring session cookie (itsdangerous) — can't be forged
-    without the server's SECRET_KEY
-  - A protected test route (/api/me) proving routes can actually be
-    locked down
+Auth from Step 2 is unchanged. This checkpoint adds one thing on top:
+/api/db-check, a protected route that proves the app can actually
+reach a real Postgres database — before any real tables or CRUD logic
+get built on top of a connection we haven't verified yet.
 
-Env vars this step needs — set in Render's dashboard, never committed
-to GitHub:
+Env vars needed — set in Render's dashboard, never committed to GitHub:
   APP_PASSWORD_HASH   - output of hash_password(), see the bottom of
                         this file for the one-time generator
   SECRET_KEY          - random string used to sign session cookies
+  DATABASE_URL        - Postgres connection string, from Render's
+                        Postgres dashboard (added this checkpoint)
 
-The app refuses to start if either is missing, on purpose — a silent
-insecure fallback is worse than a loud failure at deploy time.
+The app refuses to start if any of these are missing, on purpose — a
+silent insecure or broken fallback is worse than a loud failure at
+deploy time.
 """
 
 import os
@@ -26,6 +26,10 @@ import secrets
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from database import get_db
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
@@ -81,7 +85,7 @@ def require_auth(request: Request):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "oip-backend", "step": 2}
+    return {"status": "ok", "service": "oip-backend", "step": 3}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -136,7 +140,15 @@ def logout():
 
 @app.get("/api/me")
 def me(session: dict = Depends(require_auth)):
-    return {"authenticated": True, "step": 2}
+    return {"authenticated": True, "step": 3}
+
+
+@app.get("/api/db-check")
+def db_check(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """Proves the app can actually reach Postgres — not just that the
+    code imports cleanly. Runs a trivial query and returns its result."""
+    result = db.execute(text("SELECT 1")).scalar()
+    return {"db_connected": True, "result": result}
 
 
 # ---------------------------------------------------------------
