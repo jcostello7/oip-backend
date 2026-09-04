@@ -1,17 +1,21 @@
 """
-OIP Backend — Step 3 (checkpoint 1): database connection
+OIP Backend — Step 4 (checkpoint 1): Massive (formerly Polygon.io) connection
 
-Auth from Step 2 is unchanged. This checkpoint adds one thing on top:
-/api/db-check, a protected route that proves the app can actually
-reach a real Postgres database — before any real tables or CRUD logic
-get built on top of a connection we haven't verified yet.
+Auth (Step 2) and persistence (Step 3) are unchanged. This checkpoint
+adds one thing: /api/market-check, a protected route that proves the
+app can reach real market data — before any real logic (Opportunity
+Score's discovery drivers, real chain pricing) gets built on top of a
+connection that hasn't been verified yet. Same pattern as /api/db-check
+in Step 3.
 
 Env vars needed — set in Render's dashboard, never committed to GitHub:
   APP_PASSWORD_HASH   - output of hash_password(), see the bottom of
                         this file for the one-time generator
   SECRET_KEY          - random string used to sign session cookies
-  DATABASE_URL        - Postgres connection string, from Render's
-                        Postgres dashboard (added this checkpoint)
+  DATABASE_URL        - Postgres connection string
+  MASSIVE_API_KEY     - from your massive.com dashboard (added this
+                        checkpoint) — Polygon.io rebranded to Massive
+                        in Oct 2025, same data, same API shape
 
 The app refuses to start if any of these are missing, on purpose — a
 silent insecure or broken fallback is worse than a loud failure at
@@ -22,6 +26,9 @@ import os
 import hmac
 import hashlib
 import secrets
+import urllib.request
+import urllib.error
+import json
 
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -37,11 +44,14 @@ from seed_data import SEED_OPPORTUNITIES, SEED_JOURNAL_ENTRIES
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
+MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
 
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is not set. Set it in Render's Environment tab.")
 if not APP_PASSWORD_HASH:
     raise RuntimeError("APP_PASSWORD_HASH environment variable is not set. Set it in Render's Environment tab.")
+if not MASSIVE_API_KEY:
+    raise RuntimeError("MASSIVE_API_KEY environment variable is not set. Set it in Render's Environment tab.")
 
 COOKIE_NAME = "oip_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 14  # 14 days
@@ -183,6 +193,25 @@ def tables_check(session: dict = Depends(require_auth), db: Session = Depends(ge
     ))
     tables = [row[0] for row in result]
     return {"tables": tables}
+
+
+@app.get("/api/market-check")
+def market_check(session: dict = Depends(require_auth)):
+    """Proves the app can reach real market data — the first real test
+    of whether anything downstream (Opportunity Score, real chain
+    pricing) has real ground to stand on. Uses stdlib urllib rather
+    than a new dependency, since this is deliberately the simplest
+    possible real call: previous day's close for one ticker."""
+    url = f"https://api.massive.com/v2/aggs/ticker/AAPL/prev?adjusted=true&apiKey={MASSIVE_API_KEY}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.loads(response.read())
+        return {"connected": True, "sample": payload}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(status_code=502, detail=f"Massive API returned {e.code}: {body}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Massive API: {str(e)}")
 
 
 @app.post("/api/seed")
