@@ -307,7 +307,41 @@ def find_atm_near_term_iv(results, today, min_days_out=5):
     }
 
 
-@app.get("/api/iv-check/{ticker}")
+@app.get("/api/options-basic-check/{ticker}")
+def options_basic_check(ticker: str, session: dict = Depends(require_auth)):
+    """Tests whether Options Basic covers reference + historical price
+    data (a different category from the snapshot/greeks endpoint,
+    which we've confirmed needs Starter). If this works, real IV is
+    computable for free via Black-Scholes inversion on real option
+    prices — no paid tier needed. If this also 403s, that's the real,
+    confirmed boundary of what Basic covers."""
+    ref_url = (f"https://api.massive.com/v3/reference/options/contracts"
+               f"?underlying_ticker={ticker.upper()}&contract_type=call&limit=10&apiKey={MASSIVE_API_KEY}")
+    ref_payload = _fetch_json(ref_url)
+    contracts = ref_payload.get("results", [])
+    if not contracts:
+        return {"referenceDataAccessible": True, "contractsFound": 0,
+                "note": "Reference endpoint worked but returned no contracts — try a different ticker."}
+
+    sample_contract = contracts[0]["ticker"]
+    price_url = f"https://api.massive.com/v2/aggs/ticker/{sample_contract}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}"
+    try:
+        price_payload = _fetch_json(price_url)
+        return {
+            "referenceDataAccessible": True,
+            "contractsFound": len(contracts),
+            "sampleContract": sample_contract,
+            "historicalPriceAccessible": True,
+            "samplePriceData": price_payload
+        }
+    except HTTPException as e:
+        return {
+            "referenceDataAccessible": True,
+            "contractsFound": len(contracts),
+            "sampleContract": sample_contract,
+            "historicalPriceAccessible": False,
+            "error": e.detail
+        }
 def iv_check(ticker: str, session: dict = Depends(require_auth)):
     """Pulls the real options chain and extracts IV from the nearest
     at-the-money, near-term contract — the standard practical proxy
