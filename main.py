@@ -29,6 +29,8 @@ import secrets
 import urllib.request
 import urllib.error
 import json
+import math
+from datetime import date, timedelta
 
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -212,6 +214,47 @@ def market_check(session: dict = Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"Massive API returned {e.code}: {body}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not reach Massive API: {str(e)}")
+
+
+@app.get("/api/hv-check/{ticker}")
+def hv_check(ticker: str, session: dict = Depends(require_auth)):
+    """Computes real historical volatility from real daily closes —
+    standard deviation of log returns, annualized. No options data
+    needed for this half; implied volatility (the other half of the
+    IV-vs-HV spread) needs the separate Massive Options subscription,
+    not wired in yet."""
+    end = date.today()
+    start = end - timedelta(days=60)
+    url = (f"https://api.massive.com/v2/aggs/ticker/{ticker.upper()}/range/1/day/"
+           f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(status_code=502, detail=f"Massive API returned {e.code}: {body}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Massive API: {str(e)}")
+
+    results = payload.get("results", [])
+    if len(results) < 10:
+        raise HTTPException(status_code=502, detail=f"Not enough price history returned ({len(results)} days) to compute HV")
+
+    closes = [bar["c"] for bar in results]
+    log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    n = len(log_returns)
+    mean_return = sum(log_returns) / n
+    variance = sum((r - mean_return) ** 2 for r in log_returns) / (n - 1)
+    daily_stdev = math.sqrt(variance)
+    annualized_hv_pct = daily_stdev * math.sqrt(252) * 100
+
+    return {
+        "ticker": ticker.upper(),
+        "tradingDaysUsed": len(closes),
+        "lastClose": closes[-1],
+        "historicalVolatilityPct": round(annualized_hv_pct, 2),
+        "note": "Real HV from real price history. This is half of the IV-vs-HV spread — implied volatility still needs the separate Options subscription."
+    }
 
 
 @app.post("/api/seed")
