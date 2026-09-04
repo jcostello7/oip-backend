@@ -28,6 +28,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import text
 from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from typing import Optional
 
 from database import get_db, engine
 import models
@@ -100,8 +102,18 @@ def health():
 
 
 @app.get("/", response_class=HTMLResponse)
-def root():
-    return "<p>OIP backend is running. Go to <a href='/login'>/login</a> to sign in.</p>"
+def root(request: Request):
+    if get_session(request):
+        return RedirectResponse(url="/app")
+    return RedirectResponse(url="/login")
+
+
+@app.get("/app", response_class=HTMLResponse)
+def serve_app(request: Request):
+    if not get_session(request):
+        return RedirectResponse(url="/login")
+    with open(os.path.join(os.path.dirname(__file__), "frontend.html"), encoding="utf-8") as f:
+        return f.read()
 
 
 LOGIN_PAGE = """
@@ -134,7 +146,7 @@ def login(password: str = Form(...)):
             status_code=401,
         )
     token = serializer.dumps({"user": "owner"})
-    response = RedirectResponse(url="/api/me", status_code=303)
+    response = RedirectResponse(url="/app", status_code=303)
     response.set_cookie(
         key=COOKIE_NAME, value=token, max_age=SESSION_MAX_AGE,
         httponly=True, secure=True, samesite="lax",
@@ -219,6 +231,82 @@ def list_journal(session: dict = Depends(require_auth), db: Session = Depends(ge
         }
         for e in entries
     ]
+
+
+class OpportunityUpdate(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.patch("/api/opportunities/{opp_id}")
+def update_opportunity(opp_id: str, update: OpportunityUpdate,
+                        session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """Persists the two things the frontend actually lets someone edit
+    right now — status and notes. Everything else an opportunity shows
+    (scores, driver breakdowns, trade construction) is still computed
+    fresh client-side each load, not round-tripped through here yet."""
+    opp = db.query(models.Opportunity).filter(models.Opportunity.id == opp_id).first()
+    if not opp:
+        raise HTTPException(status_code=404, detail=f"No opportunity with id {opp_id}")
+    if update.status is not None:
+        opp.status = update.status
+    if update.notes is not None:
+        opp.notes = update.notes
+    db.commit()
+    return {"updated": True, "id": opp_id, "status": opp.status, "notes": opp.notes}
+
+
+class JournalEntryIn(BaseModel):
+    id: str
+    oppId: str = ""
+    ticker: str
+    sector: str = ""
+    loggedDate: str = ""
+    statusAtLog: str = ""
+    opportunityScore: Optional[int] = None
+    volatilityScore: Optional[int] = None
+    tradeQualityComposite: Optional[int] = None
+    convictionComposite: Optional[int] = None
+    structure: str = ""
+    thesis: str = ""
+    rationale: str = ""
+    outcome: str = ""
+    realizedPnL: str = ""
+    lessonsLearned: str = ""
+    regimeAtLog: Optional[str] = None
+    daysToCatalystAtLog: Optional[int] = None
+
+
+@app.post("/api/journal")
+def upsert_journal_entry(entry: JournalEntryIn,
+                          session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """Create or update — matches the frontend's existing behavior of
+    re-saving the same entry (e.g. adding Lessons Learned later)."""
+    existing = db.query(models.JournalEntry).filter(models.JournalEntry.id == entry.id).first()
+    target = existing or models.JournalEntry(id=entry.id)
+
+    target.opp_id = entry.oppId
+    target.ticker = entry.ticker
+    target.sector = entry.sector
+    target.logged_date = entry.loggedDate
+    target.status_at_log = entry.statusAtLog
+    target.opportunity_score = entry.opportunityScore
+    target.volatility_score = entry.volatilityScore
+    target.trade_quality_composite = entry.tradeQualityComposite
+    target.conviction_composite = entry.convictionComposite
+    target.structure = entry.structure
+    target.thesis = entry.thesis
+    target.rationale = entry.rationale
+    target.outcome = entry.outcome
+    target.realized_pnl = entry.realizedPnL
+    target.lessons_learned = entry.lessonsLearned
+    target.regime_at_log = entry.regimeAtLog
+    target.days_to_catalyst_at_log = entry.daysToCatalystAtLog
+
+    if not existing:
+        db.add(target)
+    db.commit()
+    return {"saved": True, "id": entry.id, "created": existing is None}
 
 
 # ---------------------------------------------------------------

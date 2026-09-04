@@ -1,0 +1,2410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OIP — Research Queue</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-base: #10141B;
+    --bg-panel: #171C25;
+    --bg-raised: #1D2430;
+    --bg-hover: #232B38;
+    --border: #2A323F;
+    --border-soft: #20272F;
+    --text-primary: #E6E9ED;
+    --text-secondary: #838FA3;
+    --text-tertiary: #5B6577;
+    --accent: #B08D57;
+    --accent-soft: #B08D5722;
+    --long-vol: #5AA3B8;
+    --short-vol: #B4785D;
+    --neutral: #6B7688;
+    --positive: #6FAE7F;
+    --negative: #C06A58;
+    --font-sans: 'IBM Plex Sans', -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-panel);
+    flex-shrink: 0;
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand-mark {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: 0.5px;
+    color: var(--accent);
+  }
+
+  .brand-tag {
+    font-size: 12.5px;
+    color: var(--text-tertiary);
+  }
+
+  .filter-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .chip {
+    font-size: 12.5px;
+    padding: 5px 11px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-family: var(--font-sans);
+    transition: border-color 0.15s, color 0.15s;
+  }
+
+  .chip:hover { border-color: var(--text-tertiary); color: var(--text-primary); }
+
+  .chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+
+  /* ---------- Layout ---------- */
+  .layout {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* ---------- Queue ---------- */
+  .queue {
+    width: 360px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-panel);
+    overflow-y: auto;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .queue-toggle-btn {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 6px 11px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 13px;
+  }
+
+  .queue-toggle-btn:hover { border-color: var(--text-tertiary); color: var(--text-primary); }
+
+  .queue-header {
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+
+  .qh-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .queue-title {
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+
+  .queue-count {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
+
+  .queue-card {
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--border-soft);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+
+  .queue-card:hover { background: var(--bg-hover); }
+
+  .queue-card.selected {
+    background: var(--bg-raised);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+
+  .qc-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .qc-ticker {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .qc-status {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    border: 1px solid var(--border);
+    padding: 2px 7px;
+    border-radius: 3px;
+  }
+
+  .qc-scores {
+    display: flex;
+    gap: 14px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--text-secondary);
+  }
+
+  .qc-scores b { color: var(--text-primary); font-weight: 600; }
+
+  .qc-bias-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 5px;
+  }
+
+  /* ---------- Workspace ---------- */
+  .workspace {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 40px 60px;
+  }
+
+  .ws-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 20px;
+  }
+
+  .ws-ticker-block { display: flex; align-items: baseline; gap: 14px; }
+
+  .ws-ticker {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 32px;
+  }
+
+  .ws-sector { color: var(--text-tertiary); font-size: 13px; }
+
+  .status-select {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    padding: 7px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .score-row {
+    display: flex;
+    gap: 28px;
+    padding: 18px 0;
+    border-top: 1px solid var(--border-soft);
+    border-bottom: 1px solid var(--border-soft);
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+
+  .score-block { min-width: 120px; }
+
+  .score-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+  }
+
+  .score-value {
+    font-family: var(--font-mono);
+    font-size: 24px;
+    font-weight: 600;
+  }
+
+  .score-value.small { font-size: 15px; font-weight: 500; }
+
+  .bias-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12.5px;
+    margin-top: 4px;
+  }
+
+  .bias-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  section.block { margin-bottom: 26px; }
+
+  .block-label {
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+
+  .block-body {
+    color: var(--text-primary);
+    font-size: 14.5px;
+    line-height: 1.65;
+    max-width: 640px;
+  }
+
+  .drivers {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    margin-top: 12px;
+    max-width: 520px;
+  }
+
+  .driver-row {
+    display: grid;
+    grid-template-columns: 170px 1fr 34px;
+    align-items: center;
+    gap: 10px;
+    font-size: 12.5px;
+  }
+
+  .driver-name { color: var(--text-secondary); }
+
+  .driver-track {
+    height: 5px;
+    background: var(--bg-raised);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .driver-fill { height: 100%; background: var(--accent); opacity: 0.75; }
+
+  .driver-val { font-family: var(--font-mono); text-align: right; color: var(--text-secondary); }
+
+  textarea.notes {
+    width: 100%;
+    max-width: 640px;
+    min-height: 90px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    padding: 12px;
+    resize: vertical;
+    line-height: 1.6;
+  }
+
+  textarea.notes:focus { outline: none; border-color: var(--accent); }
+
+  .reject-banner {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--short-vol);
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin-bottom: 24px;
+    max-width: 640px;
+  }
+
+  .reject-banner .rb-label { font-size: 12px; color: var(--short-vol); margin-bottom: 4px; }
+  .reject-banner .rb-followup { font-size: 12px; color: var(--text-tertiary); margin-top: 10px; font-style: italic; }
+
+  .position-panel {
+    display: flex;
+    gap: 32px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 16px 20px;
+    margin-bottom: 24px;
+    max-width: 640px;
+    flex-wrap: wrap;
+  }
+
+  .pp-item { min-width: 100px; }
+  .pp-label { font-size: 11.5px; color: var(--text-tertiary); margin-bottom: 3px; }
+  .pp-val { font-family: var(--font-mono); font-size: 15px; font-weight: 600; }
+
+  .empty-state {
+    color: var(--text-tertiary);
+    padding: 60px 0;
+    font-size: 14px;
+  }
+
+  ::-webkit-scrollbar { width: 9px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+
+  .driver-weight {
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+
+  .driver-total {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--accent);
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-soft);
+  }
+
+  .driver-group-label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .driver-group-note {
+    color: var(--text-tertiary);
+    font-style: italic;
+  }
+
+  .regime-flag {
+    display: inline-block;
+    font-size: 11px;
+    font-family: var(--font-sans);
+    padding: 1px 7px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .regime-flag.elevated { color: var(--negative); border-color: var(--negative); }
+  .regime-flag.watch { color: var(--accent); border-color: var(--accent); }
+  .regime-flag.normal { color: var(--text-tertiary); border-color: var(--border); }
+
+  .trade-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    max-width: 620px;
+  }
+
+  .trade-card.recommended {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+
+  .tc-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .tc-name {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .trade-card.recommended .tc-name { color: var(--accent); }
+
+  .tc-suitability {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+
+  .tc-row { margin-bottom: 8px; }
+  .tc-row:last-child { margin-bottom: 0; }
+
+  .tc-label {
+    display: block;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    margin-bottom: 3px;
+  }
+
+  .tc-list {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.5;
+  }
+
+  .tc-why {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+
+  .chain-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 12px;
+    max-width: 620px;
+  }
+
+  .chain-strike-card {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 10px 14px;
+  }
+
+  .chain-strike-label {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-tertiary);
+    margin-bottom: 7px;
+  }
+
+  .chain-leg-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+
+  .chain-leg-row:last-child { margin-bottom: 0; }
+
+  .chain-leg-label {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--text-primary);
+  }
+
+  .chain-leg-btns { display: flex; gap: 5px; flex-shrink: 0; }
+
+  .leg-btn {
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-family: var(--font-sans);
+  }
+
+  .leg-btn:hover { border-color: var(--text-secondary); color: var(--text-primary); }
+
+  .leg-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--bg-base);
+    font-weight: 600;
+  }
+
+  .leg-btn.sell.active {
+    background: var(--short-vol);
+    border-color: var(--short-vol);
+    color: var(--bg-base);
+  }
+
+  .backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 10, 14, 0.6);
+    z-index: 15;
+  }
+
+  @media (max-width: 780px) {
+    .queue-toggle-btn { display: inline-block; }
+
+    .queue {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 100vh;
+      z-index: 20;
+      transform: translateX(-100%);
+      transition: transform 0.2s ease;
+      box-shadow: 6px 0 28px rgba(0, 0, 0, 0.45);
+    }
+
+    .queue.open { transform: translateX(0); }
+
+    .backdrop.open { display: block; }
+
+    .workspace { padding: 22px 18px 60px; }
+
+    .ws-ticker { font-size: 26px; }
+
+    .brand-tag { display: none; }
+
+    header { flex-wrap: wrap; row-gap: 8px; }
+    .sim-btn { font-size: 11.5px; padding: 6px 9px; }
+  }
+  .sim-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 7px 13px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    transition: border-color 0.15s, color 0.15s;
+    flex-shrink: 0;
+  }
+
+  .sim-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  .updated-tag {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+  }
+
+  .qc-pending-note {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    font-style: italic;
+    margin-top: 4px;
+  }
+
+  @keyframes flashUpdate {
+    0% { background: var(--accent-soft); }
+    100% { background: transparent; }
+  }
+
+  .queue-card.flash { animation: flashUpdate 1.4s ease-out; }
+
+  @keyframes flashNew {
+    0% { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+    100% { background: transparent; box-shadow: inset 3px 0 0 transparent; }
+  }
+
+  .queue-card.flash-new { animation: flashNew 1.8s ease-out; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <button class="queue-toggle-btn" id="queueToggle" aria-label="Toggle research queue">☰ Queue</button>
+    <div class="brand">
+      <span class="brand-mark">OIP</span>
+      <span class="brand-tag">Options Intelligence Platform — research workstation</span>
+    </div>
+  </div>
+  <div style="display:flex; gap:8px;">
+    <button class="sim-btn" id="edgeToggleBtn">Edge Analytics</button>
+    <button class="sim-btn" id="journalToggleBtn">Journal (0)</button>
+    <button class="sim-btn" id="simBtn">Simulate market update</button>
+  </div>
+</header>
+
+<div class="backdrop" id="backdrop"></div>
+
+<div class="layout" id="mainLayout">
+  <div class="queue" id="queuePanel">
+    <div class="queue-header">
+      <div class="qh-row">
+        <span class="queue-title">Research Queue</span>
+        <span class="queue-count" id="queueCount">0</span>
+      </div>
+      <div class="filter-chips" id="filterChips"></div>
+    </div>
+    <div id="queueList"></div>
+  </div>
+  <div class="workspace" id="workspace">
+    <div class="empty-state">Select an opportunity from the queue.</div>
+  </div>
+</div>
+
+<div class="workspace" id="journalView" style="display:none; max-width:800px; margin:0 auto;"></div>
+<div class="workspace" id="edgeView" style="display:none; max-width:800px; margin:0 auto;"></div>
+
+<script>
+/*
+  ---------------------------------------------------------------
+  OPPORTUNITY OBJECT SCHEMA (Phase 2 — dynamic opportunity objects)
+  ---------------------------------------------------------------
+  This is the data contract every later engine (Volatility Opportunity
+  Engine, Trade Constructor, Trade Quality, Conviction) will read from
+  and write into. Phase 1 hardcoded these fields inline; Phase 2 makes
+  the shape explicit and lets objects enter/update/exit the queue at
+  runtime instead of being fixed at page load.
+
+  {
+    id: string                    // ticker, unique key
+    sector: string
+    status: one of STATUSES
+    dateAdded: string             // when it entered the queue
+    lastUpdated: string           // last score/status mutation
+    pendingAnalysis: boolean      // true = scores exist, narrative does not yet
+
+    opportunityScore: number 0-100   // "should I investigate this?"
+    oppDrivers: [ [name, value0-100], ... ]  // earnings proximity, rel. volume,
+                                              // sector leadership, technical breakout,
+                                              // momentum, liquidity, regime alignment
+
+    volatilityScore: number 0-100    // "is IV mispriced?"
+    volBias: "Long Vol" | "Short Vol" | "Neutral"
+    volDrivers: [ [name, value0-100], ... ]  // Section 7 weighted factors
+
+    suggestedTrade: string         // placeholder until Trade Constructor (Phase 4) exists
+
+    thesis: string                 // why this appeared — empty while pendingAnalysis
+    thinking: string               // what OIP saw — empty while pendingAnalysis
+    riskFactors: string            // what invalidates the thesis
+    notes: string                  // persistent, user-editable
+
+    position: { entryPrice, currentPrice, entryDate, size } | undefined
+    rejection: { reason, date } | undefined
+  }
+
+  A freshly-injected opportunity is intentionally incomplete: it carries
+  real scores (a threshold scan can produce those) but no thesis/thinking/
+  risk text, because writing that narrative is Phase 3+ work (the engines
+  don't exist yet). That gap is what "New" is meant to represent — flagged,
+  not yet analyzed. Moving to "Analyzed" should be the status that means
+  the narrative has been filled in.
+  ---------------------------------------------------------------
+*/
+
+const STATUSES = ["New","Analyzed","Watchlist","Trade Candidate","Open Position","Closed","Reject"];
+
+const BIAS_COLOR = { "Long Vol": "var(--long-vol)", "Short Vol": "var(--short-vol)", "Neutral": "var(--neutral)" };
+
+// Pool of tickers/sectors available for the market-update simulation to draw from.
+const INJECT_POOL = [
+  { id: "GOOGL", sector: "Technology" },
+  { id: "NFLX", sector: "Media & Entertainment" },
+  { id: "BA", sector: "Industrials" },
+  { id: "WMT", sector: "Consumer Staples" },
+  { id: "PYPL", sector: "Financial Technology" },
+  { id: "CAT", sector: "Industrials" },
+  { id: "LULU", sector: "Consumer Discretionary" },
+  { id: "MRK", sector: "Healthcare" },
+  { id: "F", sector: "Consumer / Auto" },
+  { id: "DE", sector: "Industrials" }
+];
+
+const OPP_DRIVER_NAMES = ["Catalyst strength","Trend / technical structure","Relative volume","Momentum","Sector leadership","Liquidity","Market regime alignment"];
+const VOL_DRIVER_NAMES = ["IV term structure","Historical volatility","Catalyst expected move","ATR / recent movement","Sector volatility regime","Historical catalyst reactions","Technical structure"];
+
+/*
+  ---------------------------------------------------------------
+  PHASE 3 — VOLATILITY OPPORTUNITY ENGINE  (Section 7 weights)
+  PHASE 3b — OPPORTUNITY SCORE ENGINE  (weights set — see below)
+  ---------------------------------------------------------------
+  Both engines are name-keyed weight maps rather than positional
+  arrays, so driver order in any given opportunity object doesn't
+  matter and weights can be tuned without touching data shape.
+  ---------------------------------------------------------------
+*/
+const VOL_WEIGHT_MAP = {
+  "IV term structure": 0.25,
+  "Historical volatility": 0.20,
+  "Catalyst expected move": 0.20,
+  "ATR / recent movement": 0.10,
+  "Sector volatility regime": 0.10,
+  "Historical catalyst reactions": 0.10,
+  "Technical structure": 0.05
+};
+
+const OPP_WEIGHT_MAP = {
+  "Catalyst strength": 0.25,
+  "Trend / technical structure": 0.20,
+  "Relative volume": 0.15,
+  "Momentum": 0.15,
+  "Sector leadership": 0.10,
+  "Liquidity": 0.10,
+  "Market regime alignment": 0.05
+};
+
+function computeWeightedScore(driverPairs, weightMap) {
+  let total = 0;
+  driverPairs.forEach(([name, val]) => { total += val * (weightMap[name] ?? 0); });
+  return Math.round(total);
+}
+
+function computeVolatilityScore(volDrivers) { return computeWeightedScore(volDrivers, VOL_WEIGHT_MAP); }
+function computeOpportunityScore(oppDrivers) { return computeWeightedScore(oppDrivers, OPP_WEIGHT_MAP); }
+
+// Corrected — the original version compared the IV term structure and
+// historical volatility *driver values*, but those represent magnitude of
+// signal (how much does this factor support the thesis), not raw levels.
+// That mismatch produced bias readings that contradicted the hand-written
+// thesis on several mock entries. IV Rank is a genuine raw input — where
+// current IV sits relative to its own range — decoupled from the weighted
+// magnitude drivers, matching what Layer 2 already specified.
+function deriveVolBias(ivRank) {
+  if (ivRank >= 60) return "Short Vol";
+  if (ivRank <= 40) return "Long Vol";
+  return "Neutral";
+}
+
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+function nowStamp() { return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+
+/*
+  ---------------------------------------------------------------
+  PHASE 3.5 — RESEARCH FRAMEWORK ENGINE (sector / market ETF proxies)
+  PHASE 5.5 — MARKET SHOCK FRAMEWORK (mock — real version needs live
+  data + your Monte Carlo model, deferred until data sourcing is set)
+  ---------------------------------------------------------------
+  Static mock weekly % moves stand in for a live feed. Each opportunity's
+  sector maps to a proxy ETF; the read here feeds the Opportunity Score's
+  "Market regime alignment" driver directly below. Once Conviction Engine
+  (Phase 6) exists, the same shock flag also feeds its Regime sub-factor —
+  a separate, point-in-time read rather than the same number reused.
+  ---------------------------------------------------------------
+*/
+const SECTOR_PROXY = {
+  "Technology": "XLK", "Semiconductors": "SMH", "Financials": "XLF",
+  "Financial Technology": "XLF", "Energy": "XLE", "Energy Services": "XLE",
+  "Healthcare": "XLV", "Consumer Staples": "XLP", "Consumer Discretionary": "XLY",
+  "Consumer / Auto": "XLY", "Media & Entertainment": "XLC", "Industrials": "XLI"
+};
+
+const MARKET_PROXY = "SPY";
+
+// Mock weekly % change per proxy ticker — replace with a live feed later.
+const PROXY_WEEKLY_CHANGE = {
+  XLK: -0.4, SMH: -2.1, XLF: 0.6, XLE: 1.8, XLV: -0.3,
+  XLP: 0.2, XLY: 0.9, XLC: -1.5, XLI: 0.5, SPY: 0.3
+};
+
+function computeShockFlag(pctChange) {
+  if (pctChange <= -1.5) return { level: "Elevated", cls: "elevated" };
+  if (pctChange <= -0.5) return { level: "Watch", cls: "watch" };
+  return { level: "Normal", cls: "normal" };
+}
+
+function getRegimeContext(sector) {
+  const sectorTicker = SECTOR_PROXY[sector] || MARKET_PROXY;
+  const sectorChange = PROXY_WEEKLY_CHANGE[sectorTicker] ?? 0;
+  const marketChange = PROXY_WEEKLY_CHANGE[MARKET_PROXY];
+  return {
+    sectorTicker, sectorChange, sectorFlag: computeShockFlag(sectorChange),
+    marketTicker: MARKET_PROXY, marketChange, marketFlag: computeShockFlag(marketChange)
+  };
+}
+
+// Regime read -> a concrete value for the "Market regime alignment" driver,
+// replacing the previously hand-authored/random placeholder for that factor.
+function regimeAlignmentValue(regime) {
+  if (regime.sectorFlag.level === "Elevated") return randInt(25, 42);
+  if (regime.sectorFlag.level === "Watch") return randInt(45, 62);
+  return randInt(65, 88);
+}
+
+function applyRegimeToOppDrivers(oppDrivers, sector) {
+  const regime = getRegimeContext(sector);
+  const idx = oppDrivers.findIndex(([name]) => name === "Market regime alignment");
+  const val = regimeAlignmentValue(regime);
+  if (idx >= 0) oppDrivers[idx] = ["Market regime alignment", val];
+  else oppDrivers.push(["Market regime alignment", val]);
+  return regime;
+}
+
+/*
+  ---------------------------------------------------------------
+  PHASE 6 — CONVICTION ENGINE (Section 6)
+  ---------------------------------------------------------------
+  Answers "do I still want this, right now" — a moment-of-decision
+  re-check, not a re-run of discovery. Reuses four already-computed
+  signals (Trade Quality, Volatility Opportunity, current Technical
+  driver reading, Regime) and adds one new one: Catalyst freshness,
+  a decay function of days-to-catalyst rather than catalyst strength.
+
+  Weights: Trade Quality 30%, Volatility Opportunity 25%, Catalyst 20%,
+  Technical 15%, Regime 10%.
+
+  Known simplification (flagged, not solved here): Catalyst and
+  Technical behave more like gates than smooth dials in real trading —
+  a catalyst that's already passed should probably invalidate the
+  thesis outright, not just cost 20% of the composite. This weighted-
+  average keeps the same mechanism every other score uses; a harder
+  gate is a future refinement, not built today.
+  ---------------------------------------------------------------
+*/
+const CONVICTION_WEIGHTS = { tradeQuality: 0.30, volatilityOpportunity: 0.25, catalyst: 0.20, technical: 0.15, regime: 0.10 };
+
+// Provisional — days until the opportunity's catalyst, per mock ticker.
+// Negative means the catalyst has already occurred.
+const DAYS_TO_CATALYST = {
+  AAPL: 4, MSFT: 12, TSLA: 3, JPM: 6, XOM: 15,
+  UNH: -2, COST: 20, AMD: 5, DIS: 25, SLB: 9
+};
+
+function catalystFreshnessScore(daysToCatalyst) {
+  if (daysToCatalyst < 0) return 10;
+  return Math.max(10, Math.min(95, Math.round(95 - daysToCatalyst * 1.8)));
+}
+
+function evaluateConviction(o) {
+  if (!o.tradeQuality) return null;
+
+  const technicalDriver = (o.oppDrivers.find(([n]) => n === "Trend / technical structure") || [null, 50])[1];
+  const regimeNow = getRegimeContext(o.sector);
+  const regimeScore = regimeAlignmentValue(regimeNow);
+  const catalystScore = catalystFreshnessScore(o.daysToCatalyst);
+
+  const scores = {
+    tradeQuality: o.tradeQuality.quality.composite,
+    volatilityOpportunity: o.volatilityScore,
+    catalyst: catalystScore,
+    technical: technicalDriver,
+    regime: regimeScore
+  };
+
+  const composite = Math.round(
+    scores.tradeQuality * CONVICTION_WEIGHTS.tradeQuality +
+    scores.volatilityOpportunity * CONVICTION_WEIGHTS.volatilityOpportunity +
+    scores.catalyst * CONVICTION_WEIGHTS.catalyst +
+    scores.technical * CONVICTION_WEIGHTS.technical +
+    scores.regime * CONVICTION_WEIGHTS.regime
+  );
+
+  const notes = {
+    tradeQuality: `Trade Quality composite ${scores.tradeQuality}`,
+    volatilityOpportunity: `Volatility score ${scores.volatilityOpportunity} (${o.volBias})`,
+    catalyst: o.daysToCatalyst < 0
+      ? `Catalyst already passed — ${Math.abs(o.daysToCatalyst)}d ago, thesis likely stale`
+      : `${o.daysToCatalyst}d to catalyst`,
+    technical: `Current trend/technical structure reading, ${technicalDriver}`,
+    regime: `${regimeNow.sectorTicker} ${regimeNow.sectorFlag.level} (${regimeNow.sectorChange >= 0 ? '+' : ''}${regimeNow.sectorChange}%)`
+  };
+
+  return { scores, notes, composite };
+}
+
+// Deterministic, per-opportunity — advances just this ticker's catalyst
+// window, so the decay mechanic can be tested directly instead of waiting
+// on the queue-wide random simulate to happen to land on this one.
+function ageOpportunityCatalyst(o) {
+  o.daysToCatalyst = (o.daysToCatalyst ?? 15) - randInt(2, 4);
+  if (o.tradeQuality) o.conviction = evaluateConviction(o);
+  o.lastUpdated = nowStamp();
+}
+
+// Pure mutation logic for a status change — extracted so it's shared
+// between the UI's status dropdown and the startup merge (applying a
+// status that was persisted to the backend on a previous visit needs
+// to run through the exact same pendingAnalysis-resolution and
+// trade-construction logic, not just silently overwrite o.status).
+function applyStatusChange(o, newStatus) {
+  o.status = newStatus;
+  if (o.pendingAnalysis && o.status !== "New") {
+    o.pendingAnalysis = false;
+    if (!o.thesis) o.thesis = "Analysis complete — see the driver breakdown below for the basis of this score.";
+    if (!o.thinking) o.thinking = "Full narrative pending manual write-up; scores and drivers reflect the threshold scan that flagged this.";
+    if (!o.riskFactors) o.riskFactors = "Not yet assessed in detail — treat drivers as directional only until reviewed.";
+  }
+  if (!o.pendingAnalysis && o.status !== "Reject") {
+    o.tradeConstruction = constructTrade(o);
+    o.suggestedTrade = o.tradeConstruction.recommended.name;
+    o.tradeQuality = evaluateTradeQuality(o);
+    o.conviction = evaluateConviction(o);
+  }
+  o.lastUpdated = nowStamp();
+}
+
+function makeDrivers(names, low, high) {
+  return names.map(n => [n, randInt(low, high)]);
+}
+
+/*
+  ---------------------------------------------------------------
+  PHASE 4 — TRADE CONSTRUCTOR ENGINE (Section 8)
+  ---------------------------------------------------------------
+  Needs a directional signal that nothing upstream provides yet —
+  Opportunity Score deliberately measures "worth investigating,"
+  not "which way." directionalLean is a new, provisional field
+  (Bullish/Bearish/Neutral) standing in for real trend-direction
+  data (moving averages, relative strength — already in Layer 1,
+  just not surfaced as a discrete signal yet).
+
+  Suitability Score here is intentionally NOT Trade Quality Score.
+  This is a fast heuristic — does this structure type fit the
+  current bias/direction/regime — with no real strikes or pricing
+  involved. Trade Quality (Phase 5) evaluates a specific instantiated
+  trade once real chain data exists. Keeping them separate on purpose.
+  ---------------------------------------------------------------
+*/
+const STRUCTURE_LIBRARY = [
+  { name: "Long Call", volFamily: "Long Vol", direction: "Bullish", definedRisk: true,
+    pros: ["Simplest bullish long-vol expression", "Uncapped upside if the move is large"],
+    cons: ["Full premium at risk", "Time decay works against you if the move is slow"] },
+  { name: "Long Put", volFamily: "Long Vol", direction: "Bearish", definedRisk: true,
+    pros: ["Simplest bearish long-vol expression", "Large payoff on a sharp decline"],
+    cons: ["Full premium at risk", "Time decay works against you if the move is slow"] },
+  { name: "Call Debit Spread", volFamily: "Long Vol", direction: "Bullish", definedRisk: true,
+    pros: ["Lower cost than a long call", "Less sensitive to an IV crush after the move"],
+    cons: ["Upside capped at the short strike", "Still needs the move within the window"] },
+  { name: "Put Debit Spread", volFamily: "Long Vol", direction: "Bearish", definedRisk: true,
+    pros: ["Lower cost than a long put", "Less sensitive to an IV crush after the move"],
+    cons: ["Payoff capped at the short strike", "Still needs the move within the window"] },
+  { name: "Straddle", volFamily: "Long Vol", direction: "Any", definedRisk: true,
+    pros: ["No directional call required", "Full exposure to a large move either way"],
+    cons: ["Expensive — pays for both sides", "Needs a big move just to break even"] },
+  { name: "Strangle", volFamily: "Long Vol", direction: "Any", definedRisk: true,
+    pros: ["Cheaper than a straddle", "Still direction-agnostic"],
+    cons: ["Wider breakevens than a straddle", "Needs an even larger move to profit"] },
+  { name: "Put Credit Spread", volFamily: "Short Vol", direction: "Bullish", definedRisk: true,
+    pros: ["Benefits from IV crush", "Profits even if flat to modestly up"],
+    cons: ["Limited, capped reward", "Loses if price drops through the short strike"] },
+  { name: "Call Credit Spread", volFamily: "Short Vol", direction: "Bearish", definedRisk: true,
+    pros: ["Benefits from IV crush", "Profits even if flat to modestly down"],
+    cons: ["Limited, capped reward", "Loses if price rallies through the short strike"] },
+  { name: "Iron Condor", volFamily: "Short Vol", direction: "Any", definedRisk: true,
+    pros: ["Direction-agnostic premium collection", "Benefits from IV crush and a quiet move"],
+    cons: ["Limited reward on both sides", "Two short strikes to manage instead of one"] }
+];
+
+function scoreStructure(struct, opp) {
+  let score = 0;
+  const reasons = [];
+
+  if (struct.volFamily === opp.volBias) {
+    score += 50;
+    reasons.push(`fits the ${opp.volBias} bias`);
+  } else {
+    score -= 20;
+  }
+
+  if (struct.direction === "Any") {
+    score += 22;
+    reasons.push("direction-agnostic, works regardless of lean");
+  } else if (struct.direction === opp.directionalLean) {
+    score += 30;
+    reasons.push(`aligned with the ${opp.directionalLean} lean`);
+  } else if (opp.directionalLean === "Neutral") {
+    score += 10;
+  } else {
+    score -= 15;
+    reasons.push(`direction mismatch vs. ${opp.directionalLean} lean`);
+  }
+
+  if (opp.regime && opp.regime.sectorFlag.level === "Elevated" && struct.definedRisk) {
+    score += 5;
+    reasons.push("defined risk fits elevated sector shock risk");
+  }
+
+  const convictionBonus = Math.round(((opp.opportunityScore + opp.volatilityScore) / 2) / 100 * 15);
+  score += convictionBonus;
+
+  return { score: Math.max(0, Math.min(100, score)), reasons };
+}
+
+function constructTrade(opp) {
+  if (opp.volBias === "Neutral") {
+    return {
+      recommended: { name: "No structure — monitor only", score: null, reasons: ["Volatility engine found no mispricing to act on"], pros: [], cons: [] },
+      alternatives: []
+    };
+  }
+  const ranked = STRUCTURE_LIBRARY
+    .map(s => ({ ...s, ...scoreStructure(s, opp) }))
+    .sort((a, b) => b.score - a.score);
+  return { recommended: ranked[0], alternatives: ranked.slice(1, 4) };
+}
+
+/*
+  ---------------------------------------------------------------
+  PHASE 5 — TRADE QUALITY ENGINE (Section 6)
+  ---------------------------------------------------------------
+  Prices the Recommended structure only (not every alternative) using
+  an illustrative mock chain — one representative expiration, five
+  strikes, a simplified extrinsic-value decay model. None of this is
+  real market pricing; it exists to make Risk/Reward, Expected Move
+  Fit, and the other factors computable on an actual instantiated
+  trade instead of staying abstract.
+
+  Weights (your call): Risk/Reward 30%, Thesis fit 25%, Expected Move
+  Fit 20%, Liquidity and execution 15%, Greeks 10%.
+
+  Thesis fit checks net DELTA against directionalLean — does the
+  priced position still lean the way the thesis claims once real
+  strikes are chosen, since category match alone doesn't guarantee it.
+  Greeks checks net VEGA sign against volBias plus theta efficiency —
+  kept deliberately separate from Thesis fit to avoid double-counting
+  the same signal twice.
+  ---------------------------------------------------------------
+*/
+const REP_DTE = 35; // single representative expiration for this phase
+
+const TRADE_QUALITY_WEIGHTS = { riskReward: 0.30, thesisFit: 0.25, expectedMoveFit: 0.20, liquidity: 0.15, greeks: 0.10 };
+
+function generateChain(price, volScale) {
+  const increment = price > 200 ? 5 : price > 50 ? 1 : 0.5;
+  const offsets = [-0.10, -0.05, 0, 0.05, 0.10];
+  const extrinsicATM = price * (volScale / 100) * 0.4;
+  return offsets.map(off => {
+    const strike = Math.round((price * (1 + off)) / increment) * increment;
+    const distanceFactor = Math.abs(off) / ((volScale / 100) || 0.01);
+    const extrinsic = extrinsicATM * Math.exp(-0.5 * distanceFactor);
+    const callIntrinsic = Math.max(0, price - strike);
+    const putIntrinsic = Math.max(0, strike - price);
+    const callPremium = Math.max(0.05, callIntrinsic + extrinsic);
+    const putPremium = Math.max(0.05, putIntrinsic + extrinsic);
+    const callDelta = Math.max(0.05, Math.min(0.95, 0.5 - 0.5 * (off / ((volScale / 100) || 0.01))));
+    const putDelta = callDelta - 1;
+    const vega = extrinsic * 0.10;
+    const theta = -extrinsic / REP_DTE;
+    return { strike, offset: off, callPremium, putPremium, callDelta, putDelta, vega, theta };
+  });
+}
+
+function findStrikeNode(chain, offset) {
+  return chain.reduce((best, c) => Math.abs(c.offset - offset) < Math.abs(best.offset - offset) ? c : best);
+}
+
+function legFromNode(type, action, node) {
+  const premium = type === 'call' ? node.callPremium : node.putPremium;
+  const delta = type === 'call' ? node.callDelta : node.putDelta;
+  const sign = action === 'buy' ? 1 : -1;
+  return { type, action, strike: node.strike, premium, delta: delta * sign, vega: node.vega * sign, theta: node.theta * sign, cashFlow: -premium * sign };
+}
+
+// Leg *selection* stays per-structure (Trade Constructor needs to know which
+// strikes each named structure uses) — but the economics below are now
+// generic, computed from a payoff curve rather than hand-coded per case.
+// This is what lets the same pricer serve both the automated recommendation
+// and any arbitrary combination of legs a person builds manually.
+function selectLegsForStructure(structureName, chain) {
+  const atm = findStrikeNode(chain, 0);
+  const callUp5 = findStrikeNode(chain, 0.05);
+  const callUp10 = findStrikeNode(chain, 0.10);
+  const putDown5 = findStrikeNode(chain, -0.05);
+  const putDown10 = findStrikeNode(chain, -0.10);
+  switch (structureName) {
+    case "Long Call": return [legFromNode('call', 'buy', atm)];
+    case "Long Put": return [legFromNode('put', 'buy', atm)];
+    case "Call Debit Spread": return [legFromNode('call', 'buy', atm), legFromNode('call', 'sell', callUp10)];
+    case "Put Debit Spread": return [legFromNode('put', 'buy', atm), legFromNode('put', 'sell', putDown10)];
+    case "Straddle": return [legFromNode('call', 'buy', atm), legFromNode('put', 'buy', atm)];
+    case "Strangle": return [legFromNode('call', 'buy', callUp5), legFromNode('put', 'buy', putDown5)];
+    case "Put Credit Spread": return [legFromNode('put', 'sell', putDown5), legFromNode('put', 'buy', putDown10)];
+    case "Call Credit Spread": return [legFromNode('call', 'sell', callUp5), legFromNode('call', 'buy', callUp10)];
+    case "Iron Condor": return [legFromNode('put', 'sell', putDown5), legFromNode('put', 'buy', putDown10), legFromNode('call', 'sell', callUp5), legFromNode('call', 'buy', callUp10)];
+    default: return null;
+  }
+}
+
+// Scans a range of expiration prices and computes total P&L from whatever
+// legs are given — works for any combination, not just the named library.
+function computePayoffCurve(legs, price, rangePct, steps) {
+  const minP = price * (1 - rangePct), maxP = price * (1 + rangePct);
+  const points = [];
+  for (let i = 0; i <= steps; i++) {
+    const p = minP + (maxP - minP) * (i / steps);
+    let pnl = 0;
+    legs.forEach(l => {
+      const intrinsic = l.type === 'call' ? Math.max(0, p - l.strike) : Math.max(0, l.strike - p);
+      pnl += (intrinsic - l.premium) * 100 * (l.action === 'buy' ? 1 : -1);
+    });
+    points.push({ price: p, pnl });
+  }
+  return points;
+}
+
+function findBreakevens(curve) {
+  const bes = [];
+  for (let i = 1; i < curve.length; i++) {
+    const a = curve[i - 1], b = curve[i];
+    if ((a.pnl < 0 && b.pnl >= 0) || (a.pnl > 0 && b.pnl <= 0)) {
+      const t = a.pnl / ((a.pnl - b.pnl) || 1);
+      bes.push(a.price + t * (b.price - a.price));
+    }
+  }
+  return bes;
+}
+
+function interpPnl(curve, targetPrice) {
+  if (targetPrice <= curve[0].price) return curve[0].pnl;
+  if (targetPrice >= curve[curve.length - 1].price) return curve[curve.length - 1].pnl;
+  for (let i = 1; i < curve.length; i++) {
+    if (curve[i - 1].price <= targetPrice && curve[i].price >= targetPrice) {
+      const a = curve[i - 1], b = curve[i];
+      const t = (targetPrice - a.price) / ((b.price - a.price) || 1);
+      return a.pnl + t * (b.pnl - a.pnl);
+    }
+  }
+  return curve[curve.length - 1].pnl;
+}
+
+// maxRisk/breakevens read straight off the curve (correct for any leg
+// combination, capped or not). maxReward is read at the historical-move
+// price point rather than the curve's outer edge — for capped structures
+// this naturally lands on the cap once the curve has flattened; for
+// uncapped ones (Long Call, etc.) it gives a realistic reward-at-a-typical-
+// move figure instead of a meaningless range-edge number.
+function priceLegs(legs, price, historicalMovePct, directionalLean) {
+  if (!legs || legs.length === 0) return null;
+  const netCashFlow = legs.reduce((s, l) => s + l.cashFlow, 0);
+  const netDelta = legs.reduce((s, l) => s + l.delta, 0);
+  const netVega = legs.reduce((s, l) => s + l.vega, 0);
+  const netTheta = legs.reduce((s, l) => s + l.theta, 0);
+
+  const curve = computePayoffCurve(legs, price, 0.25, 200);
+  const breakevens = findBreakevens(curve);
+  const maxRisk = Math.max(0, -Math.min(...curve.map(p => p.pnl)));
+
+  const upPrice = price * (1 + historicalMovePct / 100);
+  const downPrice = price * (1 - historicalMovePct / 100);
+  let maxReward;
+  if (directionalLean === 'Bullish') maxReward = Math.max(0, interpPnl(curve, upPrice));
+  else if (directionalLean === 'Bearish') maxReward = Math.max(0, interpPnl(curve, downPrice));
+  else maxReward = Math.max(0, interpPnl(curve, upPrice), interpPnl(curve, downPrice));
+
+  return { legs, netCashFlow, netDelta, netVega, netTheta, maxRisk, maxReward, breakevens, price, isDebit: netCashFlow < 0 };
+}
+
+function buildTradeInstance(structureName, chain, price, historicalMovePct, directionalLean) {
+  const legs = selectLegsForStructure(structureName, chain);
+  if (!legs) return null;
+  return priceLegs(legs, price, historicalMovePct, directionalLean);
+}
+
+function scoreTradeQuality(instance, opp) {
+  const notes = {};
+
+  const rr = instance.maxRisk > 0 ? instance.maxReward / instance.maxRisk : 0;
+  const riskReward = Math.max(0, Math.min(100, Math.round(rr * 40 + 20)));
+  notes.riskReward = `R:R ${rr.toFixed(2)} — reward $${Math.round(instance.maxReward)} vs. risk $${Math.round(instance.maxRisk)}`;
+
+  const deltaAbs = Math.abs(instance.netDelta);
+  let thesisFit;
+  if (opp.directionalLean === "Bullish") {
+    thesisFit = instance.netDelta > 0 ? Math.min(100, Math.round(deltaAbs * 150)) : Math.max(0, 40 - Math.round(deltaAbs * 100));
+  } else if (opp.directionalLean === "Bearish") {
+    thesisFit = instance.netDelta < 0 ? Math.min(100, Math.round(deltaAbs * 150)) : Math.max(0, 40 - Math.round(deltaAbs * 100));
+  } else {
+    thesisFit = Math.max(0, 100 - Math.round(deltaAbs * 200));
+  }
+  notes.thesisFit = `Net delta ${instance.netDelta.toFixed(2)} vs. ${opp.directionalLean} lean`;
+
+  const breakevenDistancePct = instance.breakevens.length
+    ? Math.min(...instance.breakevens.map(b => Math.abs(b - instance.price) / instance.price * 100))
+    : 0;
+  const hist = opp.historicalMovePct || 5;
+  let expectedMoveFit;
+  if (instance.isDebit) {
+    expectedMoveFit = Math.max(0, Math.min(100, Math.round(120 - (breakevenDistancePct / hist) * 90)));
+  } else {
+    expectedMoveFit = Math.max(0, Math.min(100, Math.round((breakevenDistancePct / hist) * 60)));
+  }
+  notes.expectedMoveFit = `Breakeven ${breakevenDistancePct.toFixed(1)}% away — typical move is ${hist}%`;
+
+  const baseLiquidity = (opp.oppDrivers.find(([n]) => n === "Liquidity") || [null, 60])[1];
+  const liquidity = Math.max(10, baseLiquidity - (instance.legs.length - 1) * 4);
+  notes.liquidity = `Chain-level liquidity ${baseLiquidity}, adjusted for a ${instance.legs.length}-leg fill`;
+
+  const vegaOk = (opp.volBias === "Long Vol" && instance.netVega > 0) || (opp.volBias === "Short Vol" && instance.netVega < 0);
+  let greeks = vegaOk ? 65 : 30;
+  if (instance.isDebit) {
+    const thetaEfficiency = Math.abs(instance.netTheta) / (Math.abs(instance.netCashFlow) || 1);
+    greeks += thetaEfficiency < 0.03 ? 25 : thetaEfficiency < 0.06 ? 10 : 0;
+  } else {
+    greeks += 25; // credit structures collect theta by design
+  }
+  greeks = Math.max(0, Math.min(100, Math.round(greeks)));
+  notes.greeks = `Net vega ${instance.netVega.toFixed(2)} (${vegaOk ? 'matches' : 'mismatched vs.'} ${opp.volBias}), theta $${Math.round(instance.netTheta * 100)}/day`;
+
+  const scores = { riskReward, thesisFit, expectedMoveFit, liquidity, greeks };
+  const composite = Math.round(
+    scores.riskReward * TRADE_QUALITY_WEIGHTS.riskReward +
+    scores.thesisFit * TRADE_QUALITY_WEIGHTS.thesisFit +
+    scores.expectedMoveFit * TRADE_QUALITY_WEIGHTS.expectedMoveFit +
+    scores.liquidity * TRADE_QUALITY_WEIGHTS.liquidity +
+    scores.greeks * TRADE_QUALITY_WEIGHTS.greeks
+  );
+
+  return { scores, notes, composite };
+}
+
+function evaluateTradeQuality(opp) {
+  const structureName = opp.tradeConstruction && opp.tradeConstruction.recommended ? opp.tradeConstruction.recommended.name : null;
+  if (!structureName || structureName.indexOf("No structure") === 0) return null;
+  // Chain shape uses a broader illustrative vol scale for the 35-day window,
+  // not the narrow single-catalyst expected move — that move is still used
+  // as-is for Expected Move Fit and the reward-scenario math below, where
+  // the catalyst-specific number is exactly what's needed.
+  const chainVolScale = Math.max(opp.impliedMovePct * 2.5, 10);
+  const chain = generateChain(opp.price, chainVolScale);
+  const instance = buildTradeInstance(structureName, chain, opp.price, opp.historicalMovePct, opp.directionalLean);
+  if (!instance) return null;
+  const quality = scoreTradeQuality(instance, opp);
+  return { chain, instance, quality };
+}
+
+function generateMockOpportunity() {
+  const used = new Set(data.map(o => o.id));
+  const available = INJECT_POOL.filter(p => !used.has(p.id));
+  if (available.length === 0) return null;
+  const pick = available[randInt(0, available.length - 1)];
+
+  const oppDrivers = makeDrivers(OPP_DRIVER_NAMES, 35, 95);
+  const volDrivers = makeDrivers(VOL_DRIVER_NAMES, 30, 90);
+  const regime = applyRegimeToOppDrivers(oppDrivers, pick.sector);
+  const ivRank = randInt(15, 85);
+  const historicalMovePct = Math.round(randInt(30, 120) / 10 * 10) / 10;
+  let impliedMovePct;
+  if (ivRank <= 40) impliedMovePct = Math.max(1, historicalMovePct - randInt(10, 40) / 10);
+  else if (ivRank >= 60) impliedMovePct = historicalMovePct + randInt(10, 40) / 10;
+  else impliedMovePct = historicalMovePct + randInt(-10, 10) / 10;
+  impliedMovePct = Math.round(impliedMovePct * 10) / 10;
+
+  return {
+    id: pick.id,
+    sector: pick.sector,
+    status: "New",
+    dateAdded: nowStamp(),
+    lastUpdated: nowStamp(),
+    pendingAnalysis: true,
+    opportunityScore: computeOpportunityScore(oppDrivers),
+    oppDrivers: oppDrivers,
+    volatilityScore: computeVolatilityScore(volDrivers),
+    ivRank: ivRank,
+    volBias: deriveVolBias(ivRank),
+    volDrivers: volDrivers,
+    regime: regime,
+    directionalLean: ["Bullish", "Bearish", "Neutral"][randInt(0, 2)],
+    price: randInt(20, 400),
+    historicalMovePct: historicalMovePct,
+    impliedMovePct: impliedMovePct,
+    daysToCatalyst: randInt(-5, 40),
+    journalEntryId: null,
+    tradeConstruction: null,
+    tradeQuality: null,
+    conviction: null,
+    suggestedTrade: "Pending trade construction",
+    thesis: "",
+    thinking: "",
+    riskFactors: "",
+    notes: ""
+  };
+}
+
+const data = [
+  {
+    id: "AAPL", sector: "Technology", status: "New",
+    opportunityScore: 82, volatilityScore: 78, volBias: "Long Vol",
+    suggestedTrade: "Call Debit Spread",
+    thesis: "Options are pricing a smaller post-earnings move than the last six quarters have actually delivered, while relative volume has been building into the print.",
+    thinking: "Opportunity score is driven mainly by earnings proximity and a strong sector-leadership read — Apple has been outperforming the broader tech complex over the past month. On the volatility side, the term structure shows a pronounced front-month bump that isn't fully justifying itself against realized move history, which is the core of the mispricing case.",
+    riskFactors: "A broad market de-risking event into the print would compress the realized move regardless of company-specific catalysts, and elevated macro uncertainty this cycle could keep IV crush milder than the historical pattern suggests.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",88],["Relative volume",76],["Sector leadership",81],["Trend / technical structure",70],["Momentum",79],["Liquidity",95],["Market regime alignment",68]],
+    volDrivers: [["IV term structure",84],["Historical volatility",65],["Catalyst expected move",80],["ATR / recent movement",58],["Sector volatility regime",71],["Historical catalyst reactions",83],["Technical structure",62]]
+  },
+  {
+    id: "MSFT", sector: "Technology", status: "New",
+    opportunityScore: 75, volatilityScore: 48, volBias: "Neutral",
+    suggestedTrade: "No structure — monitor only",
+    thesis: "Fundamentally and technically this belongs on the radar, but current options pricing looks fair — there's no clean volatility edge to act on yet.",
+    thinking: "This is a useful case for separating the two scores: strong sector leadership, healthy relative volume, and solid momentum pushed the opportunity score up, but the volatility engine found nothing meaningfully mispriced — term structure is flat and historical catalyst reactions have been unremarkable. Worth watching, not worth structuring a trade around today.",
+    riskFactors: "If this stays on Watchlist, the risk is anchoring to a name without a live catalyst — re-check volatility inputs closer to the next earnings window rather than assuming today's neutral read persists.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",42],["Relative volume",68],["Sector leadership",85],["Trend / technical structure",55],["Momentum",74],["Liquidity",96],["Market regime alignment",71]],
+    volDrivers: [["IV term structure",45],["Historical volatility",40],["Catalyst expected move",38],["ATR / recent movement",41],["Sector volatility regime",52],["Historical catalyst reactions",44],["Technical structure",48]]
+  },
+  {
+    id: "TSLA", sector: "Consumer / Auto", status: "Watchlist",
+    opportunityScore: 79, volatilityScore: 85, volBias: "Long Vol",
+    suggestedTrade: "Straddle",
+    thesis: "Delivery-number uncertainty into the print, combined with a term structure that hasn't fully caught up to how violently this name has historically moved on surprises.",
+    thinking: "High relative volume and a fresh technical breakout are carrying the opportunity score. On volatility, ATR and recent movement are both elevated and historical catalyst reactions confirm this name routinely outsizes its priced-in move — that combination is what's driving the long-vol bias rather than any single factor alone.",
+    riskFactors: "This name's realized-move history is bimodal — it either moves enormously or barely at all — so expected-value math on a straddle is more sensitive to entry timing than most setups in the queue.",
+    notes: "Watching for confirmation on delivery estimates before moving to Trade Candidate.",
+    oppDrivers: [["Catalyst strength",80],["Relative volume",91],["Sector leadership",64],["Trend / technical structure",85],["Momentum",77],["Liquidity",93],["Market regime alignment",60]],
+    volDrivers: [["IV term structure",70],["Historical volatility",82],["Catalyst expected move",88],["ATR / recent movement",90],["Sector volatility regime",66],["Historical catalyst reactions",92],["Technical structure",75]]
+  },
+  {
+    id: "JPM", sector: "Financials", status: "Trade Candidate",
+    opportunityScore: 68, volatilityScore: 71, volBias: "Short Vol",
+    suggestedTrade: "Put Credit Spread",
+    thesis: "IV has been bid up ahead of the sector's earnings cluster more than JPM's own historical reaction justifies, given it usually reports calmly relative to regional peers.",
+    thinking: "Sector volatility regime is elevated across financials right now, which is inflating this name's IV alongside names that actually deserve it. Historical catalyst reactions for JPM specifically have been muted, and technical structure shows a stable uptrend rather than a breakout — the case here is that the market is over-pricing the move, not that a large move is coming.",
+    riskFactors: "A sector-wide surprise (regulatory news, a peer bank miss) would keep the whole complex volatile regardless of JPM's own fundamentals, which would work against a short-vol structure.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",71],["Relative volume",58],["Sector leadership",66],["Trend / technical structure",50],["Momentum",62],["Liquidity",89],["Market regime alignment",73]],
+    volDrivers: [["IV term structure",76],["Historical volatility",55],["Catalyst expected move",48],["ATR / recent movement",44],["Sector volatility regime",88],["Historical catalyst reactions",39],["Technical structure",57]]
+  },
+  {
+    id: "XOM", sector: "Energy", status: "New",
+    opportunityScore: 60, volatilityScore: 66, volBias: "Long Vol",
+    suggestedTrade: "Call Debit Spread",
+    thesis: "Crude has been chopping in a wide range and options pricing hasn't fully adjusted to the recent pickup in day-to-day realized movement.",
+    thinking: "Sector volatility regime and recent ATR are the two biggest contributors here — energy has been noisier than usual sector-wide, and this name's own recent movement is running ahead of what its IV term structure reflects. Technical structure is only middling, which is why this sits at 60 on opportunity rather than higher.",
+    riskFactors: "Energy names are exposed to macro headline risk (OPEC decisions, geopolitical events) that can move price sharply in either direction without warning — the mispricing thesis could resolve suddenly rather than gradually.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",48],["Relative volume",63],["Sector leadership",57],["Trend / technical structure",44],["Momentum",55],["Liquidity",80],["Market regime alignment",69]],
+    volDrivers: [["IV term structure",58],["Historical volatility",61],["Catalyst expected move",50],["ATR / recent movement",74],["Sector volatility regime",79],["Historical catalyst reactions",56],["Technical structure",49]]
+  },
+  {
+    id: "UNH", sector: "Healthcare", status: "Open Position",
+    opportunityScore: 74, volatilityScore: 80, volBias: "Long Vol",
+    suggestedTrade: "Call Debit Spread",
+    thesis: "Regulatory-headline sensitivity combined with underpriced expected move ahead of guidance commentary.",
+    thinking: "This trade was opened on the back of a strong catalyst-expected-move reading and a historical pattern of this name outsizing its priced move around policy news. Momentum and technical breakout both confirmed at entry.",
+    riskFactors: "Policy-driven moves in this sector can reverse quickly on follow-up headlines — monitor the position rather than assuming the initial move direction holds.",
+    notes: "Entered on confirmation of technical breakout above prior resistance.",
+    oppDrivers: [["Catalyst strength",70],["Relative volume",72],["Sector leadership",68],["Trend / technical structure",83],["Momentum",78],["Liquidity",85],["Market regime alignment",64]],
+    volDrivers: [["IV term structure",77],["Historical volatility",69],["Catalyst expected move",86],["ATR / recent movement",63],["Sector volatility regime",70],["Historical catalyst reactions",81],["Technical structure",72]],
+    position: { entryPrice: 4.85, currentPrice: 6.20, entryDate: "Aug 14, 2026", size: "10 contracts" }
+  },
+  {
+    id: "COST", sector: "Consumer Staples", status: "Analyzed",
+    opportunityScore: 55, volatilityScore: 40, volBias: "Neutral",
+    suggestedTrade: "No structure — monitor only",
+    thesis: "Solid business, no live catalyst, and volatility pricing looks appropriately calm — this is a hold-in-queue case, not an action case.",
+    thinking: "Every input here is middling rather than any single factor standing out. That flatness is itself the signal: nothing about current pricing looks mispriced in either direction.",
+    riskFactors: "Low urgency also means low attention — re-check ahead of the next earnings window rather than letting this go stale in Analyzed.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",35],["Relative volume",48],["Sector leadership",60],["Trend / technical structure",40],["Momentum",52],["Liquidity",84],["Market regime alignment",58]],
+    volDrivers: [["IV term structure",38],["Historical volatility",35],["Catalyst expected move",30],["ATR / recent movement",33],["Sector volatility regime",42],["Historical catalyst reactions",36],["Technical structure",41]]
+  },
+  {
+    id: "AMD", sector: "Semiconductors", status: "New",
+    opportunityScore: 88, volatilityScore: 83, volBias: "Long Vol",
+    suggestedTrade: "Call Debit Spread",
+    thesis: "Sector-wide momentum plus a specific term-structure kink around the upcoming print make this the strongest setup in today's queue.",
+    thinking: "Nearly every opportunity driver is elevated — sector leadership, momentum, relative volume, and a confirmed technical breakout all agree. On volatility, term structure and historical catalyst reactions both support a long-vol read; this is one of the cleaner alignments between the two scores in the current queue.",
+    riskFactors: "Semiconductor names move as a complex — a peer's guidance cut could move this name on correlation alone, independent of its own fundamentals.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",84],["Relative volume",89],["Sector leadership",90],["Trend / technical structure",86],["Momentum",85],["Liquidity",91],["Market regime alignment",74]],
+    volDrivers: [["IV term structure",87],["Historical volatility",74],["Catalyst expected move",85],["ATR / recent movement",79],["Sector volatility regime",81],["Historical catalyst reactions",88],["Technical structure",77]]
+  },
+  {
+    id: "DIS", sector: "Media & Entertainment", status: "Reject",
+    opportunityScore: 45, volatilityScore: 52, volBias: "Neutral",
+    suggestedTrade: "No structure — rejected",
+    thesis: "Initial scan flagged elevated relative volume, but deeper review found no clean catalyst or volatility mispricing to justify a structure.",
+    thinking: "Relative volume triggered the initial queue entry, but on closer look it traced to a broad media-sector rotation rather than anything specific to this name. No edge found once the noise was filtered out.",
+    riskFactors: "N/A — rejected before trade construction.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",30],["Relative volume",78],["Sector leadership",42],["Trend / technical structure",38],["Momentum",45],["Liquidity",70],["Market regime alignment",50]],
+    volDrivers: [["IV term structure",48],["Historical volatility",50],["Catalyst expected move",40],["ATR / recent movement",46],["Sector volatility regime",55],["Historical catalyst reactions",49],["Technical structure",47]],
+    rejection: { reason: "Volume spike traced to sector-wide rotation, not company-specific catalyst. No volatility mispricing found on deeper review.", date: "Aug 22, 2026" }
+  },
+  {
+    id: "SLB", sector: "Energy Services", status: "Watchlist",
+    opportunityScore: 63, volatilityScore: 69, volBias: "Short Vol",
+    suggestedTrade: "Put Credit Spread",
+    thesis: "Options pricing is carrying a volatility premium left over from a prior guidance scare that the underlying business has since stabilized past.",
+    thinking: "Historical volatility and sector volatility regime are still running hot from an event several months back, but recent ATR and technical structure both point to a name that's calmed down. The short-vol case rests on that gap between residual pricing and current stability.",
+    riskFactors: "If the earlier guidance concern resurfaces, IV could reprice higher quickly rather than continuing to fade — this is a mean-reversion thesis, and those can be wrong at the wrong moment.",
+    notes: "",
+    oppDrivers: [["Catalyst strength",55],["Relative volume",50],["Sector leadership",48],["Trend / technical structure",41],["Momentum",47],["Liquidity",68],["Market regime alignment",62]],
+    volDrivers: [["IV term structure",64],["Historical volatility",78],["Catalyst expected move",42],["ATR / recent movement",39],["Sector volatility regime",75],["Historical catalyst reactions",58],["Technical structure",40]]
+  }
+];
+
+// Provisional — Bullish/Bearish/Neutral lean per mock opportunity, standing
+// in for real trend-direction data until that's wired in later. Chosen here
+// to match each opportunity's existing thesis/suggested-trade narrative.
+// Provisional — where current IV sits relative to its own range, 0-100.
+// Chosen here to match each opportunity's existing written thesis.
+// Provisional mock market data — price and expected-move percentages.
+// historicalMovePct/impliedMovePct mirror your own Layer 2 example
+// (historical earnings move 8%, options pricing 5%) rather than reusing
+// the 0-100 magnitude drivers, same fix pattern as IV Rank.
+const MOCK_PRICE = {
+  AAPL: 227, MSFT: 415, TSLA: 245, JPM: 215, XOM: 118,
+  UNH: 590, COST: 890, AMD: 145, DIS: 96, SLB: 44
+};
+
+const EXPECTED_MOVE = {
+  AAPL: { historical: 7.5, implied: 5.2 },
+  MSFT: { historical: 4.0, implied: 4.1 },
+  TSLA: { historical: 11.0, implied: 8.0 },
+  JPM: { historical: 3.2, implied: 4.8 },
+  XOM: { historical: 5.5, implied: 3.9 },
+  UNH: { historical: 6.8, implied: 4.9 },
+  COST: { historical: 3.5, implied: 3.6 },
+  AMD: { historical: 9.5, implied: 6.8 },
+  DIS: { historical: 4.5, implied: 4.6 },
+  SLB: { historical: 4.0, implied: 5.6 }
+};
+
+const IV_RANK = {
+  AAPL: 28, MSFT: 50, TSLA: 30, JPM: 72, XOM: 33,
+  UNH: 30, COST: 48, AMD: 32, DIS: 52, SLB: 70
+};
+
+const DIRECTIONAL_LEAN = {
+  AAPL: "Bullish", MSFT: "Neutral", TSLA: "Neutral", JPM: "Bullish",
+  XOM: "Bullish", UNH: "Bullish", COST: "Neutral", AMD: "Bullish",
+  DIS: "Neutral", SLB: "Bullish"
+};
+
+// Backfill schema fields on the original static entries so every object
+// in `data` — hand-authored or simulated — conforms to the same contract.
+data.forEach(o => {
+  if (o.dateAdded === undefined) o.dateAdded = "Aug 2026";
+  if (o.lastUpdated === undefined) o.lastUpdated = "Aug 2026";
+  if (o.pendingAnalysis === undefined) o.pendingAnalysis = false;
+  // Phase 3: volatility score and bias are now derived from the driver
+  // set via the real engine, not the hand-authored placeholder values.
+  o.volatilityScore = computeVolatilityScore(o.volDrivers);
+  o.ivRank = IV_RANK[o.id] ?? 50;
+  o.volBias = deriveVolBias(o.ivRank);
+  o.regime = applyRegimeToOppDrivers(o.oppDrivers, o.sector);
+  o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+  o.directionalLean = DIRECTIONAL_LEAN[o.id] || "Neutral";
+  o.price = MOCK_PRICE[o.id] || 100;
+  const em = EXPECTED_MOVE[o.id] || { historical: 5, implied: 5 };
+  o.historicalMovePct = em.historical;
+  o.impliedMovePct = em.implied;
+  o.daysToCatalyst = DAYS_TO_CATALYST[o.id] ?? 15;
+  if (o.journalEntryId === undefined) o.journalEntryId = null;
+  // Phase 4: suggested trade now comes from the Trade Constructor engine,
+  // not a hand-authored placeholder — except where construction doesn't
+  // apply (rejected, or still awaiting analysis).
+  if (o.status !== "Reject" && !o.pendingAnalysis) {
+    o.tradeConstruction = constructTrade(o);
+    o.suggestedTrade = o.tradeConstruction.recommended.name;
+    o.tradeQuality = evaluateTradeQuality(o);
+    o.conviction = evaluateConviction(o);
+  } else {
+    o.tradeConstruction = null;
+    o.tradeQuality = null;
+    o.conviction = null;
+  }
+});
+
+let selectedId = data[0].id;
+let activeFilter = "All";
+let customLegsByOpp = {};
+let notesSyncTimers = {};
+
+/*
+  ---------------------------------------------------------------
+  PHASE 7 — JOURNAL (Section 12)
+  ---------------------------------------------------------------
+  Tracks: opportunity, trade, scores, rationale, outcome, lessons
+  learned — a frozen snapshot at the moment of logging, not a live
+  reference, since scores keep moving via Simulate. Available once
+  an opportunity reaches Closed or Reject, since those are the two
+  terminal states — a trade that happened, or one that was passed
+  on. Rejected entries get journaled too, per the earlier decision
+  that missed opportunities are real edge-analytics signal.
+  ---------------------------------------------------------------
+*/
+// Seed history — illustrative past trades so Personal Edge Analytics has
+// something real to find patterns in immediately, rather than starting
+// empty. Deliberately varied across structure/sector/regime/conviction so
+// the patterns below (defined-risk structures outperforming straddles,
+// elevated-regime trades underperforming, high-conviction trades winning
+// more often) are genuinely discoverable, not just plausible-looking.
+let journalEntries = [
+  { id: "J-seed-1", oppId: "AAPL", ticker: "AAPL", sector: "Technology", loggedDate: "Jul 2, 2026", statusAtLog: "Closed", opportunityScore: 78, volatilityScore: 72, tradeQualityComposite: 66, convictionComposite: 74, structure: "Call Debit Spread", thesis: "", rationale: "IV underpricing pre-earnings move.", outcome: "Win", realizedPnL: "+310", lessonsLearned: "Entered with enough runway before the print.", regimeAtLog: "Normal", daysToCatalystAtLog: 4 },
+  { id: "J-seed-2", oppId: "NVDA", ticker: "NVDA", sector: "Semiconductors", loggedDate: "Jul 5, 2026", statusAtLog: "Closed", opportunityScore: 85, volatilityScore: 79, tradeQualityComposite: 68, convictionComposite: 77, structure: "Call Debit Spread", thesis: "", rationale: "Sector leadership plus underpriced move.", outcome: "Win", realizedPnL: "+265", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 6 },
+  { id: "J-seed-3", oppId: "TSLA", ticker: "TSLA", sector: "Consumer / Auto", loggedDate: "Jul 9, 2026", statusAtLog: "Closed", opportunityScore: 81, volatilityScore: 80, tradeQualityComposite: 53, convictionComposite: 58, structure: "Straddle", thesis: "", rationale: "Delivery-number uncertainty, no clean direction.", outcome: "Loss", realizedPnL: "-180", lessonsLearned: "Premium was too rich relative to the typical move — should've sized down.", regimeAtLog: "Normal", daysToCatalystAtLog: 3 },
+  { id: "J-seed-4", oppId: "JPM", ticker: "JPM", sector: "Financials", loggedDate: "Jul 11, 2026", statusAtLog: "Closed", opportunityScore: 66, volatilityScore: 60, tradeQualityComposite: 58, convictionComposite: 64, structure: "Put Credit Spread", thesis: "", rationale: "Sector IV overpriced relative to this name's history.", outcome: "Win", realizedPnL: "+140", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 6 },
+  { id: "J-seed-5", oppId: "XOM", ticker: "XOM", sector: "Energy", loggedDate: "Jul 14, 2026", statusAtLog: "Closed", opportunityScore: 60, volatilityScore: 60, tradeQualityComposite: 61, convictionComposite: 62, structure: "Call Debit Spread", thesis: "", rationale: "ATR pickup underpriced by term structure.", outcome: "Win", realizedPnL: "+220", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 15 },
+  { id: "J-seed-6", oppId: "AMD", ticker: "AMD", sector: "Semiconductors", loggedDate: "Jul 18, 2026", statusAtLog: "Closed", opportunityScore: 88, volatilityScore: 83, tradeQualityComposite: 63, convictionComposite: 73, structure: "Long Call", thesis: "", rationale: "Cleanest alignment across every driver this cycle.", outcome: "Win", realizedPnL: "+480", lessonsLearned: "High-conviction setups are worth sizing up on.", regimeAtLog: "Normal", daysToCatalystAtLog: 5 },
+  { id: "J-seed-7", oppId: "SLB", ticker: "SLB", sector: "Energy Services", loggedDate: "Jul 20, 2026", statusAtLog: "Closed", opportunityScore: 52, volatilityScore: 59, tradeQualityComposite: 49, convictionComposite: 59, structure: "Put Credit Spread", thesis: "", rationale: "Residual premium from an old guidance scare.", outcome: "Win", realizedPnL: "+95", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 9 },
+  { id: "J-seed-8", oppId: "DIS", ticker: "DIS", sector: "Media & Entertainment", loggedDate: "Jul 21, 2026", statusAtLog: "Reject", opportunityScore: 45, volatilityScore: 52, tradeQualityComposite: null, convictionComposite: null, structure: "No structure — rejected", thesis: "", rationale: "Volume spike traced to sector rotation, not a real catalyst.", outcome: "Good call", realizedPnL: "", lessonsLearned: "Glad this got filtered out before wasting a slot.", regimeAtLog: "Elevated", daysToCatalystAtLog: 25 },
+  { id: "J-seed-9", oppId: "MU", ticker: "MU", sector: "Semiconductors", loggedDate: "Jul 24, 2026", statusAtLog: "Closed", opportunityScore: 70, volatilityScore: 75, tradeQualityComposite: 51, convictionComposite: 55, structure: "Straddle", thesis: "", rationale: "Sector volatile into print, no directional edge.", outcome: "Loss", realizedPnL: "-310", lessonsLearned: "Sector-wide elevated regime should have been a bigger red flag.", regimeAtLog: "Elevated", daysToCatalystAtLog: 4 },
+  { id: "J-seed-10", oppId: "BA", ticker: "BA", sector: "Industrials", loggedDate: "Jul 27, 2026", statusAtLog: "Closed", opportunityScore: 58, volatilityScore: 55, tradeQualityComposite: 56, convictionComposite: 60, structure: "Iron Condor", thesis: "", rationale: "IV rich relative to realized, no directional catalyst.", outcome: "Win", realizedPnL: "+85", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 18 },
+  { id: "J-seed-11", oppId: "GOOGL", ticker: "GOOGL", sector: "Technology", loggedDate: "Jul 29, 2026", statusAtLog: "Closed", opportunityScore: 74, volatilityScore: 68, tradeQualityComposite: 62, convictionComposite: 69, structure: "Call Debit Spread", thesis: "", rationale: "Underpriced move into ad-revenue guidance.", outcome: "Win", realizedPnL: "+190", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 7 },
+  { id: "J-seed-12", oppId: "NFLX", ticker: "NFLX", sector: "Media & Entertainment", loggedDate: "Aug 1, 2026", statusAtLog: "Closed", opportunityScore: 55, volatilityScore: 58, tradeQualityComposite: 45, convictionComposite: 48, structure: "Long Put", thesis: "", rationale: "Subscriber growth concern into print.", outcome: "Loss", realizedPnL: "-150", lessonsLearned: "Low conviction going in — should have passed.", regimeAtLog: "Watch", daysToCatalystAtLog: 12 },
+  { id: "J-seed-13", oppId: "WMT", ticker: "WMT", sector: "Consumer Staples", loggedDate: "Aug 3, 2026", statusAtLog: "Closed", opportunityScore: 57, volatilityScore: 54, tradeQualityComposite: 59, convictionComposite: 64, structure: "Put Credit Spread", thesis: "", rationale: "IV rich vs. this name's typically calm reaction.", outcome: "Win", realizedPnL: "+110", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 20 },
+  { id: "J-seed-14", oppId: "CAT", ticker: "CAT", sector: "Industrials", loggedDate: "Aug 5, 2026", statusAtLog: "Closed", opportunityScore: 54, volatilityScore: 52, tradeQualityComposite: 55, convictionComposite: 58, structure: "Call Credit Spread", thesis: "", rationale: "Sector IV rich, bearish drift expected.", outcome: "Win", realizedPnL: "+75", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 14 },
+  { id: "J-seed-15", oppId: "UNH", ticker: "UNH", sector: "Healthcare", loggedDate: "Aug 8, 2026", statusAtLog: "Closed", opportunityScore: 74, volatilityScore: 80, tradeQualityComposite: 62, convictionComposite: 68, structure: "Call Debit Spread", thesis: "", rationale: "Underpriced move into policy commentary.", outcome: "Win", realizedPnL: "+420", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 6 },
+  { id: "J-seed-16", oppId: "PYPL", ticker: "PYPL", sector: "Financial Technology", loggedDate: "Aug 10, 2026", statusAtLog: "Closed", opportunityScore: 62, volatilityScore: 65, tradeQualityComposite: 50, convictionComposite: 52, structure: "Straddle", thesis: "", rationale: "Uncertain direction into guidance.", outcome: "Loss", realizedPnL: "-220", lessonsLearned: "Another straddle loss during an elevated-regime stretch — noticing the pattern now.", regimeAtLog: "Elevated", daysToCatalystAtLog: 5 },
+  { id: "J-seed-17", oppId: "LULU", ticker: "LULU", sector: "Consumer Discretionary", loggedDate: "Aug 13, 2026", statusAtLog: "Closed", opportunityScore: 68, volatilityScore: 63, tradeQualityComposite: 60, convictionComposite: 70, structure: "Call Debit Spread", thesis: "", rationale: "Technical breakout plus underpriced move.", outcome: "Win", realizedPnL: "+160", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 8 },
+  { id: "J-seed-18", oppId: "MRK", ticker: "MRK", sector: "Healthcare", loggedDate: "Aug 15, 2026", statusAtLog: "Closed", opportunityScore: 59, volatilityScore: 57, tradeQualityComposite: 58, convictionComposite: 67, structure: "Put Credit Spread", thesis: "", rationale: "Calm historical reaction, IV overpriced.", outcome: "Win", realizedPnL: "+130", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 11 },
+  { id: "J-seed-19", oppId: "F", ticker: "F", sector: "Consumer / Auto", loggedDate: "Aug 17, 2026", statusAtLog: "Closed", opportunityScore: 51, volatilityScore: 54, tradeQualityComposite: 47, convictionComposite: 51, structure: "Long Call", thesis: "", rationale: "Marginal setup, took it anyway.", outcome: "Loss", realizedPnL: "-190", lessonsLearned: "Conviction was under 55 — this is becoming a pattern worth respecting.", regimeAtLog: "Watch", daysToCatalystAtLog: 9 },
+  { id: "J-seed-20", oppId: "DE", ticker: "DE", sector: "Industrials", loggedDate: "Aug 19, 2026", statusAtLog: "Closed", opportunityScore: 65, volatilityScore: 61, tradeQualityComposite: 63, convictionComposite: 72, structure: "Call Debit Spread", thesis: "", rationale: "Strong technical structure into equipment demand data.", outcome: "Win", realizedPnL: "+175", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 10 },
+  { id: "J-seed-21", oppId: "COST", ticker: "COST", sector: "Consumer Staples", loggedDate: "Aug 21, 2026", statusAtLog: "Reject", opportunityScore: 50, volatilityScore: 36, tradeQualityComposite: null, convictionComposite: null, structure: "No structure — rejected", thesis: "", rationale: "No catalyst, no mispricing — nothing to act on.", outcome: "Passed", realizedPnL: "", lessonsLearned: "", regimeAtLog: "Normal", daysToCatalystAtLog: 20 },
+  { id: "J-seed-22", oppId: "XOM", ticker: "XOM", sector: "Energy", loggedDate: "Aug 24, 2026", statusAtLog: "Closed", opportunityScore: 56, volatilityScore: 66, tradeQualityComposite: 20, convictionComposite: 50, structure: "Straddle", thesis: "", rationale: "Energy sector-wide volatility, no directional read.", outcome: "Loss", realizedPnL: "-260", lessonsLearned: "Straddles keep underperforming for me — worth reconsidering as a default choice.", regimeAtLog: "Elevated", daysToCatalystAtLog: 15 }
+];
+let journalDraftByOpp = {};
+let journalViewOpen = false;
+let edgeViewOpen = false;
+
+function getJournalDraft(o) {
+  if (!journalDraftByOpp[o.id]) {
+    const existing = o.journalEntryId ? journalEntries.find(e => e.id === o.journalEntryId) : null;
+    journalDraftByOpp[o.id] = existing
+      ? { outcome: existing.outcome, realizedPnL: existing.realizedPnL, lessonsLearned: existing.lessonsLearned }
+      : { outcome: o.status === "Reject" ? "Passed" : "Win", realizedPnL: "", lessonsLearned: "" };
+  }
+  return journalDraftByOpp[o.id];
+}
+
+function saveJournalEntry(o) {
+  const draft = getJournalDraft(o);
+  const entry = {
+    id: o.journalEntryId || ("J-" + Date.now() + "-" + Math.floor(Math.random() * 1000)),
+    oppId: o.id,
+    ticker: o.id,
+    sector: o.sector,
+    loggedDate: nowStamp(),
+    statusAtLog: o.status,
+    opportunityScore: o.opportunityScore,
+    volatilityScore: o.volatilityScore,
+    tradeQualityComposite: o.tradeQuality ? o.tradeQuality.quality.composite : null,
+    convictionComposite: o.conviction ? o.conviction.composite : null,
+    structure: o.suggestedTrade,
+    thesis: o.thesis,
+    rationale: (o.status === "Reject" && o.rejection) ? o.rejection.reason : o.riskFactors,
+    outcome: draft.outcome,
+    realizedPnL: draft.realizedPnL,
+    lessonsLearned: draft.lessonsLearned,
+    regimeAtLog: (o.regime && o.regime.sectorFlag) ? o.regime.sectorFlag.level : null,
+    daysToCatalystAtLog: o.daysToCatalyst ?? null
+  };
+  const idx = journalEntries.findIndex(e => e.id === entry.id);
+  if (idx >= 0) journalEntries[idx] = entry; else journalEntries.push(entry);
+  o.journalEntryId = entry.id;
+
+  // Persist to the backend. Fire-and-forget from the UI's perspective —
+  // local state is already updated above, so the person isn't blocked
+  // waiting on the network; a failure here just means this entry stays
+  // local-only until the next successful save.
+  fetch("/api/journal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(entry)
+  }).catch(err => console.warn("Journal entry saved locally but failed to sync to backend:", err));
+}
+
+function getCustomLegs(oppId) { return customLegsByOpp[oppId] || []; }
+
+function toggleCustomLeg(oppId, chain, type, strike, action) {
+  const legs = customLegsByOpp[oppId] ? [...customLegsByOpp[oppId]] : [];
+  const idx = legs.findIndex(l => l.strike === strike && l.type === type);
+  if (idx >= 0 && legs[idx].action === action) {
+    legs.splice(idx, 1);
+  } else {
+    const node = chain.find(c => c.strike === strike);
+    const newLeg = legFromNode(type, action, node);
+    if (idx >= 0) legs[idx] = newLeg; else legs.push(newLeg);
+  }
+  customLegsByOpp[oppId] = legs;
+}
+
+function clearCustomLegs(oppId) { customLegsByOpp[oppId] = []; }
+let flashIds = new Set();
+let newIds = new Set();
+
+function getOpp(id) { return data.find(o => o.id === id); }
+
+function biasDotColor(bias) { return BIAS_COLOR[bias] || "var(--neutral)"; }
+
+function renderChips() {
+  const el = document.getElementById("filterChips");
+  const counts = { All: data.length };
+  STATUSES.forEach(s => counts[s] = data.filter(o => o.status === s).length);
+  const labels = ["All", ...STATUSES];
+  el.innerHTML = labels.map(l =>
+    `<button class="chip ${activeFilter === l ? 'active' : ''}" data-filter="${l}">${l} (${counts[l] ?? 0})</button>`
+  ).join("");
+  el.querySelectorAll(".chip").forEach(btn => {
+    btn.addEventListener("click", () => { activeFilter = btn.dataset.filter; renderQueue(); renderChips(); });
+  });
+}
+
+function renderQueue() {
+  const list = document.getElementById("queueList");
+  const filtered = activeFilter === "All" ? data : data.filter(o => o.status === activeFilter);
+  document.getElementById("queueCount").textContent = filtered.length;
+
+  if (filtered.length === 0) {
+    list.innerHTML = `<div class="empty-state" style="padding:24px 18px;">No opportunities at this status.</div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(o => `
+    <div class="queue-card ${o.id === selectedId ? 'selected' : ''} ${flashIds.has(o.id) ? 'flash' : ''} ${newIds.has(o.id) ? 'flash-new' : ''}" data-id="${o.id}">
+      <div class="qc-top">
+        <span class="qc-ticker">${o.id}</span>
+        <span class="qc-status">${o.status}</span>
+      </div>
+      <div class="qc-scores">
+        <span><span class="qc-bias-dot" style="background:${biasDotColor(o.volBias)}"></span>Opp <b>${o.opportunityScore}</b></span>
+        <span>Vol <b>${o.volatilityScore}</b></span>
+      </div>
+      ${o.pendingAnalysis ? '<div class="qc-pending-note">Flagged by threshold scan — analysis pending</div>' : ''}
+    </div>
+  `).join("");
+
+  flashIds.clear();
+  newIds.clear();
+
+  list.querySelectorAll(".queue-card").forEach(card => {
+    card.addEventListener("click", () => {
+      selectedId = card.dataset.id;
+      renderQueue();
+      renderWorkspace();
+      if (window.innerWidth <= 780) closeDrawer();
+    });
+  });
+}
+
+function openDrawer() {
+  document.getElementById("queuePanel").classList.add("open");
+  document.getElementById("backdrop").classList.add("open");
+}
+
+function closeDrawer() {
+  document.getElementById("queuePanel").classList.remove("open");
+  document.getElementById("backdrop").classList.remove("open");
+}
+
+document.getElementById("queueToggle").addEventListener("click", () => {
+  document.getElementById("queuePanel").classList.contains("open") ? closeDrawer() : openDrawer();
+});
+
+document.getElementById("backdrop").addEventListener("click", closeDrawer);
+
+function weightedDriverRows(driverPairs, weightMap, scoreLabel) {
+  const rows = driverPairs.map(([name, val]) => `
+    <div class="driver-row">
+      <span class="driver-name">${name} <span class="driver-weight">${Math.round((weightMap[name] ?? 0) * 100)}%</span></span>
+      <div class="driver-track"><div class="driver-fill" style="width:${val}%"></div></div>
+      <span class="driver-val">${val}</span>
+    </div>
+  `).join("");
+  const total = computeWeightedScore(driverPairs, weightMap);
+  return rows + `<div class="driver-total">Weighted composite → ${scoreLabel} ${total}</div>`;
+}
+
+function structureCard(struct, isRecommended) {
+  const prosHtml = struct.pros && struct.pros.length
+    ? `<div class="tc-row"><span class="tc-label">Pros</span><ul class="tc-list">${struct.pros.map(p => `<li>${p}</li>`).join("")}</ul></div>` : "";
+  const consHtml = struct.cons && struct.cons.length
+    ? `<div class="tc-row"><span class="tc-label">Cons</span><ul class="tc-list">${struct.cons.map(c => `<li>${c}</li>`).join("")}</ul></div>` : "";
+  return `
+    <div class="trade-card ${isRecommended ? 'recommended' : ''}">
+      <div class="tc-top">
+        <span class="tc-name">${isRecommended ? 'Recommended — ' : ''}${struct.name}</span>
+        ${struct.score !== null && struct.score !== undefined ? `<span class="tc-suitability">${struct.score}</span>` : ''}
+      </div>
+      ${prosHtml}
+      ${consHtml}
+      <div class="tc-row"><span class="tc-label">Why selected</span><div class="tc-why">${(struct.reasons || []).join("; ") || '—'}</div></div>
+    </div>`;
+}
+
+function tradeConstructorHtml(o) {
+  if (o.pendingAnalysis) return `<div class="block-body">Trade construction pending analysis — moves to Analyzed to unlock this.</div>`;
+  if (o.status === "Reject") return `<div class="block-body">N/A — rejected before trade construction.</div>`;
+  if (!o.tradeConstruction) return `<div class="block-body">—</div>`;
+
+  const { recommended, alternatives } = o.tradeConstruction;
+  let html = structureCard(recommended, true);
+  if (alternatives && alternatives.length) {
+    html += `<div class="driver-group-label" style="margin-top:16px;">Alternatives</div>`;
+    html += alternatives.map(a => structureCard(a, false)).join("");
+  }
+  html += tradeQualityHtml(o);
+  html += chainExplorerHtml(o);
+  return html;
+}
+
+const TQ_LABELS = { riskReward: "Risk/Reward", thesisFit: "Thesis fit", expectedMoveFit: "Expected Move Fit", liquidity: "Liquidity and execution", greeks: "Greeks" };
+
+function tradeQualityHtml(o) {
+  const tq = o.tradeQuality;
+  if (!tq) return "";
+  const { instance, quality } = tq;
+  const legsText = instance.legs.map(l => `${l.action} ${l.type} $${l.strike}`).join(" &nbsp;/&nbsp; ");
+  const flowLabel = instance.isDebit ? "Net debit" : "Net credit";
+  const flowVal = Math.round(Math.abs(instance.netCashFlow) * 100);
+
+  const rows = Object.keys(quality.scores).map(key => {
+    const val = quality.scores[key];
+    const weight = Math.round(TRADE_QUALITY_WEIGHTS[key] * 100);
+    return `
+      <div class="driver-row">
+        <span class="driver-name">${TQ_LABELS[key]} <span class="driver-weight">${weight}%</span></span>
+        <div class="driver-track"><div class="driver-fill" style="width:${val}%"></div></div>
+        <span class="driver-val">${val}</span>
+      </div>
+      <div class="updated-tag" style="margin:-3px 0 8px 0;">${quality.notes[key]}</div>
+    `;
+  }).join("");
+
+  return `
+    <div class="trade-card" style="margin-top:16px;">
+      <div class="tc-top"><span class="tc-name">Instantiated trade <span class="driver-group-note">(illustrative pricing — not real market data)</span></span></div>
+      <div class="tc-row"><span class="tc-label">Legs (${REP_DTE} DTE, representative expiration)</span><div class="tc-why">${legsText}</div></div>
+      <div class="tc-row"><span class="tc-label">${flowLabel} / Max risk / Max reward</span><div class="tc-why">$${flowVal} / $${Math.round(instance.maxRisk)} / $${Math.round(instance.maxReward)}</div></div>
+      <div class="tc-row"><span class="tc-label">Breakeven${instance.breakevens.length > 1 ? 's' : ''}</span><div class="tc-why">${instance.breakevens.map(b => '$' + b.toFixed(2)).join(', ')}</div></div>
+    </div>
+    <div class="driver-group-label" style="margin-top:16px;">Trade Quality Score</div>
+    <div class="drivers">${rows}<div class="driver-total">Weighted composite → Trade Quality ${quality.composite}</div></div>
+  `;
+}
+
+const CONVICTION_LABELS = { tradeQuality: "Trade Quality", volatilityOpportunity: "Volatility Opportunity", catalyst: "Catalyst freshness", technical: "Technical (current)", regime: "Regime" };
+
+function convictionHtml(o) {
+  if (o.pendingAnalysis) return `<div class="block-body">Pending analysis — no trade to have conviction about yet.</div>`;
+  if (o.status === "Reject") return `<div class="block-body">N/A — rejected before a trade existed.</div>`;
+  if (!o.conviction) return `<div class="block-body">No structure recommended — conviction doesn't apply without a trade to evaluate.</div>`;
+
+  const c = o.conviction;
+  const rows = Object.keys(c.scores).map(key => {
+    const val = c.scores[key];
+    const weight = Math.round(CONVICTION_WEIGHTS[key] * 100);
+    return `
+      <div class="driver-row">
+        <span class="driver-name">${CONVICTION_LABELS[key]} <span class="driver-weight">${weight}%</span></span>
+        <div class="driver-track"><div class="driver-fill" style="width:${val}%"></div></div>
+        <span class="driver-val">${val}</span>
+      </div>
+      <div class="updated-tag" style="margin:-3px 0 8px 0;">${c.notes[key]}</div>
+    `;
+  }).join("");
+
+  return `
+    <div class="drivers">${rows}<div class="driver-total">Weighted composite → Conviction ${c.composite}</div></div>
+    <div class="updated-tag" style="margin-top:10px;">Weighted average, not a hard gate — a catalyst that's already passed pulls the composite down but won't zero it out on its own. Worth reading Catalyst freshness directly, not just the composite, before allocating.</div>
+    <button class="sim-btn" id="ageCatalystBtn" style="margin-top:12px;">Advance time on this opportunity</button>
+  `;
+}
+
+function journalFormHtml(o) {
+  if (o.status !== "Closed" && o.status !== "Reject") {
+    return `<div class="block-body">Available once this reaches Closed or Reject — those are the two terminal states worth a permanent record.</div>`;
+  }
+  const draft = getJournalDraft(o);
+  const outcomeOptions = o.status === "Reject"
+    ? ["Passed", "Missed opportunity", "Good call"]
+    : ["Win", "Loss", "Breakeven"];
+  const pnlField = o.status === "Closed" ? `
+    <div class="tc-row">
+      <span class="tc-label">Realized P&amp;L</span>
+      <input type="text" class="notes" id="journalPnl" style="min-height:auto; padding:8px 12px;" placeholder="e.g. +320 or -150" value="${draft.realizedPnL}">
+    </div>` : '';
+  const existingTag = o.journalEntryId
+    ? `<div class="updated-tag" style="margin-top:8px;">Logged ${(journalEntries.find(e => e.id === o.journalEntryId) || {}).loggedDate || ''}</div>`
+    : '';
+  return `
+    <div class="tc-row">
+      <span class="tc-label">Outcome</span>
+      <select class="status-select" id="journalOutcome">
+        ${outcomeOptions.map(opt => `<option value="${opt}" ${draft.outcome === opt ? 'selected' : ''}>${opt}</option>`).join('')}
+      </select>
+    </div>
+    ${pnlField}
+    <div class="tc-row">
+      <span class="tc-label">Lessons learned</span>
+      <textarea class="notes" id="journalLessons" placeholder="What would you tell yourself next time?">${draft.lessonsLearned}</textarea>
+    </div>
+    <button class="sim-btn" id="saveJournalBtn" style="margin-top:8px;">${o.journalEntryId ? 'Update journal entry' : 'Log to journal'}</button>
+    ${existingTag}
+  `;
+}
+
+function chainExplorerHtml(o) {
+  const chainVolScale = Math.max(o.impliedMovePct * 2.5, 10);
+  const chain = generateChain(o.price, chainVolScale);
+  const legs = getCustomLegs(o.id);
+  const isActive = (type, strike, action) => legs.some(l => l.type === type && l.strike === strike && l.action === action) ? 'active' : '';
+
+  const strikeCards = chain.map(node => `
+    <div class="chain-strike-card">
+      <div class="chain-strike-label">Strike $${node.strike}</div>
+      <div class="chain-leg-row">
+        <span class="chain-leg-label">Call $${node.callPremium.toFixed(2)} <span class="driver-weight">Δ ${node.callDelta.toFixed(2)}</span></span>
+        <div class="chain-leg-btns">
+          <button class="leg-btn ${isActive('call', node.strike, 'buy')}" data-type="call" data-strike="${node.strike}" data-action="buy">Buy</button>
+          <button class="leg-btn sell ${isActive('call', node.strike, 'sell')}" data-type="call" data-strike="${node.strike}" data-action="sell">Sell</button>
+        </div>
+      </div>
+      <div class="chain-leg-row">
+        <span class="chain-leg-label">Put $${node.putPremium.toFixed(2)} <span class="driver-weight">Δ ${node.putDelta.toFixed(2)}</span></span>
+        <div class="chain-leg-btns">
+          <button class="leg-btn ${isActive('put', node.strike, 'buy')}" data-type="put" data-strike="${node.strike}" data-action="buy">Buy</button>
+          <button class="leg-btn sell ${isActive('put', node.strike, 'sell')}" data-type="put" data-strike="${node.strike}" data-action="sell">Sell</button>
+        </div>
+      </div>
+    </div>
+  `).join("");
+
+  let summaryHtml;
+  if (legs.length) {
+    const priced = priceLegs(legs, o.price, o.historicalMovePct, o.directionalLean);
+    const q = scoreTradeQuality(priced, o);
+    const legsText = priced.legs.map(l => `${l.action} ${l.type} $${l.strike}`).join(" &nbsp;/&nbsp; ");
+    const flowLabel = priced.isDebit ? "Net debit" : "Net credit";
+    const flowVal = Math.round(Math.abs(priced.netCashFlow) * 100);
+    summaryHtml = `
+      <div class="trade-card recommended" style="margin-top:12px;">
+        <div class="tc-top"><span class="tc-name">Your custom trade</span><span class="tc-suitability">${q.composite}</span></div>
+        <div class="tc-row"><span class="tc-label">Legs</span><div class="tc-why">${legsText}</div></div>
+        <div class="tc-row"><span class="tc-label">${flowLabel} / Max risk / Max reward</span><div class="tc-why">$${flowVal} / $${Math.round(priced.maxRisk)} / $${Math.round(priced.maxReward)}</div></div>
+        <div class="tc-row"><span class="tc-label">Breakeven${priced.breakevens.length > 1 ? 's' : ''}</span><div class="tc-why">${priced.breakevens.length ? priced.breakevens.map(b => '$' + b.toFixed(2)).join(', ') : '—'}</div></div>
+        <div class="tc-row"><span class="tc-label">Trade Quality (same engine as above)</span><div class="tc-why">R:R ${q.scores.riskReward} · Thesis fit ${q.scores.thesisFit} · Move fit ${q.scores.expectedMoveFit} · Liquidity ${q.scores.liquidity} · Greeks ${q.scores.greeks}</div></div>
+      </div>
+      <button class="sim-btn" id="clearLegsBtn" style="margin-top:10px;">Clear selection</button>
+    `;
+  } else {
+    summaryHtml = `<div class="block-body" style="margin-top:10px;">Select legs above to price a custom trade.</div>`;
+  }
+
+  return `
+    <div class="driver-group-label" style="margin-top:22px;">Build your own trade <span class="driver-group-note">(illustrative chain — same pricing engine as above)</span></div>
+    <div class="chain-grid">${strikeCards}</div>
+    ${summaryHtml}
+  `;
+}
+
+function renderWorkspace() {
+  const ws = document.getElementById("workspace");
+  const o = getOpp(selectedId);
+  if (!o) { ws.innerHTML = `<div class="empty-state">Select an opportunity from the queue.</div>`; return; }
+
+  const statusOptions = STATUSES.map(s => `<option value="${s}" ${s === o.status ? 'selected' : ''}>${s}</option>`).join("");
+
+  let positionHtml = "";
+  if (o.status === "Open Position" && o.position) {
+    const pnl = (o.position.currentPrice - o.position.entryPrice).toFixed(2);
+    const pnlPct = (((o.position.currentPrice - o.position.entryPrice) / o.position.entryPrice) * 100).toFixed(1);
+    const pnlColor = pnl >= 0 ? "var(--positive)" : "var(--negative)";
+    positionHtml = `
+      <div class="position-panel">
+        <div class="pp-item"><div class="pp-label">Entry price</div><div class="pp-val">$${o.position.entryPrice.toFixed(2)}</div></div>
+        <div class="pp-item"><div class="pp-label">Current price</div><div class="pp-val">$${o.position.currentPrice.toFixed(2)}</div></div>
+        <div class="pp-item"><div class="pp-label">Unrealized P&amp;L</div><div class="pp-val" style="color:${pnlColor}">${pnl >= 0 ? '+' : ''}$${pnl} (${pnlPct >= 0 ? '+' : ''}${pnlPct}%)</div></div>
+        <div class="pp-item"><div class="pp-label">Entry date</div><div class="pp-val" style="font-size:13px;">${o.position.entryDate}</div></div>
+        <div class="pp-item"><div class="pp-label">Size</div><div class="pp-val" style="font-size:13px;">${o.position.size}</div></div>
+      </div>`;
+  }
+
+  let rejectHtml = "";
+  if (o.status === "Reject" && o.rejection) {
+    rejectHtml = `
+      <div class="reject-banner">
+        <div class="rb-label">Rejection reason — ${o.rejection.date}</div>
+        <div>${o.rejection.reason}</div>
+        <div class="rb-followup">Will populate once live data feeds are connected — tracks what this opportunity actually did after being passed on, for edge analytics.</div>
+      </div>`;
+  }
+
+  let pendingHtml = "";
+  if (o.pendingAnalysis) {
+    pendingHtml = `
+      <div class="reject-banner" style="border-left-color: var(--accent);">
+        <div class="rb-label" style="color: var(--accent);">Awaiting analysis</div>
+        <div>This opportunity was flagged by a threshold scan on score alone. Thesis, thinking, and risk factors haven't been written up yet — that happens once it moves to Analyzed.</div>
+      </div>`;
+  }
+
+  let regimeHtml = "";
+  if (o.regime) {
+    const r = o.regime;
+    regimeHtml = `
+      <div class="position-panel">
+        <div class="pp-item">
+          <div class="pp-label">Sector proxy</div>
+          <div class="pp-val">${r.sectorTicker} <span class="regime-flag ${r.sectorFlag.cls}">${r.sectorFlag.level}</span></div>
+          <div class="updated-tag">${r.sectorChange >= 0 ? '+' : ''}${r.sectorChange}% (5d)</div>
+        </div>
+        <div class="pp-item">
+          <div class="pp-label">Market proxy</div>
+          <div class="pp-val">${r.marketTicker} <span class="regime-flag ${r.marketFlag.cls}">${r.marketFlag.level}</span></div>
+          <div class="updated-tag">${r.marketChange >= 0 ? '+' : ''}${r.marketChange}% (5d)</div>
+        </div>
+        <div class="pp-item" style="flex:1; min-width:200px;">
+          <div class="pp-label">Regime context — Phase 3.5 / 5.5 (mock proxy data)</div>
+          <div class="updated-tag" style="margin-top:6px; line-height:1.5;">Feeds Market regime alignment below. Will also feed Conviction Score's Regime sub-factor once Phase 6 exists.</div>
+        </div>
+      </div>`;
+  }
+
+  ws.innerHTML = `
+    <div class="ws-header">
+      <div class="ws-ticker-block">
+        <span class="ws-ticker">${o.id}</span>
+        <span class="ws-sector">${o.sector}</span>
+      </div>
+      <div style="text-align:right;">
+        <select class="status-select" id="statusSelect">${statusOptions}</select>
+        <div class="updated-tag">Updated ${o.lastUpdated}</div>
+      </div>
+    </div>
+
+    <div class="score-row">
+      <div class="score-block">
+        <div class="score-label">Opportunity score</div>
+        <div class="score-value">${o.opportunityScore}</div>
+      </div>
+      <div class="score-block">
+        <div class="score-label">Volatility score</div>
+        <div class="score-value">${o.volatilityScore}</div>
+        <div class="bias-tag"><span class="bias-dot" style="background:${biasDotColor(o.volBias)}"></span>${o.volBias} <span class="driver-weight">IV Rank ${o.ivRank}</span></div>
+      </div>
+      <div class="score-block">
+        <div class="score-label">Trade quality</div>
+        <div class="score-value">${o.tradeQuality ? o.tradeQuality.quality.composite : '—'}</div>
+      </div>
+      <div class="score-block">
+        <div class="score-label">Conviction</div>
+        <div class="score-value">${o.conviction ? o.conviction.composite : '—'}</div>
+      </div>
+      <div class="score-block">
+        <div class="score-label">Suggested trade</div>
+        <div class="score-value small">${o.suggestedTrade}</div>
+      </div>
+    </div>
+
+    ${regimeHtml}
+    ${rejectHtml}
+    ${positionHtml}
+    ${pendingHtml}
+
+    <section class="block">
+      <div class="block-label">Thesis</div>
+      <div class="block-body">${o.thesis || '—'}</div>
+    </section>
+
+    <section class="block">
+      <div class="block-label">Thinking</div>
+      <div class="block-body">${o.thinking || '—'}</div>
+      <div class="driver-group-label">Opportunity Score Engine <span class="driver-group-note">(weights approved)</span></div>
+      <div class="drivers">${weightedDriverRows(o.oppDrivers, OPP_WEIGHT_MAP, "opportunity score")}</div>
+      <div class="updated-tag" style="margin-top:6px;">Liquidity here is a coarse tradeability gate — Trade Quality Score (Phase 5) re-checks liquidity at the specific structure and strikes.</div>
+      <div class="driver-group-label" style="margin-top:18px;">Volatility Opportunity Engine <span class="driver-group-note">(Section 7 weights)</span></div>
+      <div class="drivers">${weightedDriverRows(o.volDrivers, VOL_WEIGHT_MAP, "volatility score")}</div>
+    </section>
+
+    <section class="block">
+      <div class="block-label">Risk factors</div>
+      <div class="block-body">${o.riskFactors || '—'}</div>
+    </section>
+
+    <section class="block">
+      <div class="block-label">Trade Constructor <span class="driver-group-note">(Section 8)</span></div>
+      ${tradeConstructorHtml(o)}
+    </section>
+
+    <section class="block">
+      <div class="block-label">Conviction <span class="driver-group-note">(Section 6 — do I still want this, right now)</span></div>
+      ${convictionHtml(o)}
+    </section>
+
+    <section class="block">
+      <div class="block-label">Journal <span class="driver-group-note">(Section 12)</span></div>
+      ${journalFormHtml(o)}
+    </section>
+
+    <section class="block">
+      <div class="block-label">Research notes</div>
+      <textarea class="notes" id="notesArea" placeholder="Add persistent notes on this opportunity…">${o.notes}</textarea>
+    </section>
+  `;
+
+  document.getElementById("statusSelect").addEventListener("change", (e) => {
+    applyStatusChange(o, e.target.value);
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: o.status })
+    }).catch(err => console.warn("Status changed locally but failed to sync to backend:", err));
+    renderQueue();
+    renderChips();
+    renderWorkspace();
+  });
+
+  document.getElementById("notesArea").addEventListener("input", (e) => {
+    o.notes = e.target.value;
+    clearTimeout(notesSyncTimers[o.id]);
+    notesSyncTimers[o.id] = setTimeout(() => {
+      fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: o.notes })
+      }).catch(err => console.warn("Notes changed locally but failed to sync to backend:", err));
+    }, 600);
+  });
+
+  const chainVolScale = Math.max(o.impliedMovePct * 2.5, 10);
+  const chainForEvents = generateChain(o.price, chainVolScale);
+  ws.querySelectorAll(".leg-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      toggleCustomLeg(o.id, chainForEvents, btn.dataset.type, parseFloat(btn.dataset.strike), btn.dataset.action);
+      renderWorkspace();
+    });
+  });
+  const clearLegsBtn = document.getElementById("clearLegsBtn");
+  if (clearLegsBtn) clearLegsBtn.addEventListener("click", () => { clearCustomLegs(o.id); renderWorkspace(); });
+  const ageCatalystBtn = document.getElementById("ageCatalystBtn");
+  if (ageCatalystBtn) ageCatalystBtn.addEventListener("click", () => { ageOpportunityCatalyst(o); renderWorkspace(); });
+
+  const journalOutcomeEl = document.getElementById("journalOutcome");
+  if (journalOutcomeEl) journalOutcomeEl.addEventListener("change", (e) => { getJournalDraft(o).outcome = e.target.value; });
+  const journalPnlEl = document.getElementById("journalPnl");
+  if (journalPnlEl) journalPnlEl.addEventListener("input", (e) => { getJournalDraft(o).realizedPnL = e.target.value; });
+  const journalLessonsEl = document.getElementById("journalLessons");
+  if (journalLessonsEl) journalLessonsEl.addEventListener("input", (e) => { getJournalDraft(o).lessonsLearned = e.target.value; });
+  const saveJournalBtn = document.getElementById("saveJournalBtn");
+  if (saveJournalBtn) saveJournalBtn.addEventListener("click", () => {
+    saveJournalEntry(o);
+    updateJournalToggleLabel();
+    renderWorkspace();
+  });
+}
+
+function updateJournalToggleLabel() {
+  const btn = document.getElementById("journalToggleBtn");
+  if (btn) btn.textContent = journalViewOpen ? "Back to Queue" : `Journal (${journalEntries.length})`;
+}
+
+function updateEdgeToggleLabel() {
+  const btn = document.getElementById("edgeToggleBtn");
+  if (btn) btn.textContent = edgeViewOpen ? "Back to Queue" : "Edge Analytics";
+}
+
+function journalEntryCardHtml(entry) {
+  const outcomeColor = entry.outcome === "Win" || entry.outcome === "Good call" ? "var(--positive)"
+    : entry.outcome === "Loss" || entry.outcome === "Missed opportunity" ? "var(--negative)"
+    : "var(--text-tertiary)";
+  return `
+    <div class="trade-card" style="margin-bottom:14px;">
+      <div class="tc-top">
+        <span class="tc-name">${entry.ticker} <span class="driver-weight">${entry.sector}</span></span>
+        <span class="tc-suitability" style="color:${outcomeColor}; border-color:${outcomeColor};">${entry.outcome}</span>
+      </div>
+      <div class="tc-row"><span class="tc-label">Logged ${entry.loggedDate} — ${entry.statusAtLog}</span><div class="tc-why">${entry.structure}</div></div>
+      <div class="tc-row"><span class="tc-label">Scores at log time</span><div class="tc-why">Opportunity ${entry.opportunityScore} · Volatility ${entry.volatilityScore} · Trade Quality ${entry.tradeQualityComposite ?? '—'} · Conviction ${entry.convictionComposite ?? '—'}</div></div>
+      ${entry.realizedPnL ? `<div class="tc-row"><span class="tc-label">Realized P&amp;L</span><div class="tc-why">${entry.realizedPnL}</div></div>` : ''}
+      <div class="tc-row"><span class="tc-label">Rationale</span><div class="tc-why">${entry.rationale || '—'}</div></div>
+      <div class="tc-row"><span class="tc-label">Lessons learned</span><div class="tc-why">${entry.lessonsLearned || '—'}</div></div>
+    </div>
+  `;
+}
+
+function renderJournalView() {
+  const el = document.getElementById("journalView");
+  if (journalEntries.length === 0) {
+    el.innerHTML = `<div class="empty-state">No journal entries yet. Log an opportunity once it reaches Closed or Reject.</div>`;
+    return;
+  }
+  const sorted = [...journalEntries].reverse();
+  el.innerHTML = `
+    <div class="driver-group-label" style="margin-bottom:14px;">Journal <span class="driver-group-note">(${journalEntries.length} entries — frozen snapshots, not live scores)</span></div>
+    ${sorted.map(journalEntryCardHtml).join("")}
+  `;
+}
+
+/*
+  ---------------------------------------------------------------
+  PHASE 8 — PERSONAL EDGE ANALYTICS (Section 13)
+  ---------------------------------------------------------------
+  Mines closed Journal entries for patterns. Two of Section 13's five
+  named categories don't have real data to analyze yet and are called
+  out honestly rather than faked: "Best DTE" — every trade in this
+  build prices off one representative 35-day expiration (Phase 5),
+  no DTE variation exists to compare. "Best catalyst" — catalyst
+  *type* (earnings/FDA/macro/etc.) was never tracked as a category,
+  only timing (days-to-catalyst) and a strength score. Catalyst
+  timing window is shown as the closest available substitute.
+  "Highest EV opportunities" also has no literal EV field to sort by
+  — Trade Quality replaced Expected Value with Thesis Fit early on
+  (a deliberate, discussed choice) — so highest realized P&L is shown
+  in its place.
+  ---------------------------------------------------------------
+*/
+function computeEdgeAnalytics() {
+  const closed = journalEntries.filter(e => e.statusAtLog === "Closed" && e.realizedPnL !== "" && e.realizedPnL !== undefined && e.realizedPnL !== null);
+  const parsed = closed.map(e => ({ ...e, pnlNum: parseFloat(String(e.realizedPnL).replace(/[^\-0-9.]/g, "")) || 0 }));
+
+  function groupStats(keyFn) {
+    const groups = {};
+    parsed.forEach(e => {
+      const k = keyFn(e);
+      if (!groups[k]) groups[k] = { count: 0, wins: 0, totalPnl: 0 };
+      groups[k].count++;
+      if (e.pnlNum > 0) groups[k].wins++;
+      groups[k].totalPnl += e.pnlNum;
+    });
+    return Object.entries(groups)
+      .map(([key, v]) => ({ key, count: v.count, winRate: Math.round((v.wins / v.count) * 100), avgPnl: Math.round(v.totalPnl / v.count), totalPnl: Math.round(v.totalPnl) }))
+      .sort((a, b) => b.avgPnl - a.avgPnl);
+  }
+
+  const byStrategy = groupStats(e => e.structure);
+  const bySector = groupStats(e => e.sector);
+  const byRegime = groupStats(e => e.regimeAtLog || "Unknown");
+  const byCatalystWindow = groupStats(e => {
+    const d = e.daysToCatalystAtLog;
+    if (d === undefined || d === null) return "Unknown";
+    if (d < 0) return "Already passed";
+    if (d <= 7) return "Imminent (0–7d)";
+    if (d <= 20) return "Near-term (8–20d)";
+    return "Far out (20d+)";
+  });
+  const byConvictionBand = groupStats(e => {
+    const c = e.convictionComposite;
+    if (c === null || c === undefined) return "Unknown";
+    if (c >= 65) return "High conviction (65+)";
+    if (c >= 55) return "Medium conviction (55–64)";
+    return "Low conviction (<55)";
+  });
+
+  const topByPnl = [...parsed].sort((a, b) => b.pnlNum - a.pnlNum).slice(0, 5);
+
+  return { totalClosed: parsed.length, byStrategy, bySector, byRegime, byCatalystWindow, byConvictionBand, topByPnl };
+}
+
+function edgeGroupTableHtml(title, note, groups) {
+  if (!groups.length) return "";
+  const rows = groups.map(g => `
+    <div class="driver-row">
+      <span class="driver-name">${g.key}</span>
+      <div class="driver-track"><div class="driver-fill" style="width:${Math.max(4, g.winRate)}%"></div></div>
+      <span class="driver-val">${g.winRate}%</span>
+    </div>
+    <div class="updated-tag" style="margin:-3px 0 8px 0;">${g.count} trade${g.count === 1 ? '' : 's'} · avg P&amp;L ${g.avgPnl >= 0 ? '+' : ''}$${g.avgPnl} · total ${g.totalPnl >= 0 ? '+' : ''}$${g.totalPnl}</div>
+  `).join("");
+  return `
+    <div class="driver-group-label" style="margin-top:18px;">${title}${note ? ` <span class="driver-group-note">${note}</span>` : ''}</div>
+    <div class="drivers">${rows}</div>
+  `;
+}
+
+function renderEdgeView() {
+  const el = document.getElementById("edgeView");
+  const a = computeEdgeAnalytics();
+  if (a.totalClosed === 0) {
+    el.innerHTML = `
+      <div class="driver-group-label">Personal Edge Analytics <span class="driver-group-note">(Section 13)</span></div>
+      <div class="empty-state">No closed trades logged yet — analytics need real history to find patterns in. Log a few trades to the Journal first.</div>
+    `;
+    return;
+  }
+
+  const topHtml = a.topByPnl.map(e => `
+    <div class="trade-card" style="margin-bottom:10px;">
+      <div class="tc-top">
+        <span class="tc-name">${e.ticker} <span class="driver-weight">${e.structure}</span></span>
+        <span class="tc-suitability">${e.pnlNum >= 0 ? '+' : ''}$${e.pnlNum}</span>
+      </div>
+      <div class="tc-row"><span class="tc-label">Logged ${e.loggedDate}</span><div class="tc-why">Conviction ${e.convictionComposite ?? '—'} · Regime ${e.regimeAtLog ?? '—'}</div></div>
+    </div>
+  `).join("");
+
+  el.innerHTML = `
+    <div class="driver-group-label">Personal Edge Analytics <span class="driver-group-note">(Section 13 — based on ${a.totalClosed} closed trades)</span></div>
+    <div class="updated-tag" style="margin-top:6px; line-height:1.5;">Best DTE and catalyst-type breakdowns aren't shown — neither is tracked as a variable in this build (every trade prices off one representative 35-day expiration, and catalyst category was never recorded, only timing). Catalyst timing window stands in below.</div>
+    ${edgeGroupTableHtml("Best strategy", "by average realized P&L", a.byStrategy)}
+    ${edgeGroupTableHtml("Best sector", "", a.bySector)}
+    ${edgeGroupTableHtml("Best regime at entry", "", a.byRegime)}
+    ${edgeGroupTableHtml("Catalyst timing window", "substitute for catalyst type, which isn't tracked", a.byCatalystWindow)}
+    ${edgeGroupTableHtml("Conviction score vs. outcome", "does your own Conviction score actually predict wins?", a.byConvictionBand)}
+    <div class="driver-group-label" style="margin-top:20px;">Highest P&amp;L trades <span class="driver-group-note">(substitute for "highest EV" — no literal EV score exists in this build)</span></div>
+    ${topHtml}
+  `;
+}
+
+document.getElementById("journalToggleBtn").addEventListener("click", () => {
+  journalViewOpen = !journalViewOpen;
+  if (journalViewOpen) edgeViewOpen = false;
+  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen) ? "none" : "flex";
+  document.getElementById("journalView").style.display = journalViewOpen ? "block" : "none";
+  document.getElementById("edgeView").style.display = edgeViewOpen ? "block" : "none";
+  if (journalViewOpen) renderJournalView();
+  updateJournalToggleLabel();
+  updateEdgeToggleLabel();
+});
+
+document.getElementById("edgeToggleBtn").addEventListener("click", () => {
+  edgeViewOpen = !edgeViewOpen;
+  if (edgeViewOpen) journalViewOpen = false;
+  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen) ? "none" : "flex";
+  document.getElementById("journalView").style.display = journalViewOpen ? "block" : "none";
+  document.getElementById("edgeView").style.display = edgeViewOpen ? "block" : "none";
+  if (edgeViewOpen) renderEdgeView();
+  updateJournalToggleLabel();
+  updateEdgeToggleLabel();
+});
+
+// Loads persisted state from the backend (status/notes overrides,
+// real journal history) and merges it into the locally-computed data
+// before the first render. If the backend is unreachable, falls back
+// to local defaults rather than showing a broken page — a degraded
+// but working app beats a blank one.
+async function initFromBackend() {
+  try {
+    const [oppsRes, journalRes] = await Promise.all([
+      fetch("/api/opportunities"),
+      fetch("/api/journal")
+    ]);
+
+    if (oppsRes.ok) {
+      const backendOpps = await oppsRes.json();
+      backendOpps.forEach(bo => {
+        const local = data.find(o => o.id === bo.id);
+        if (!local) return; // backend has a ticker this session's local seed doesn't know about
+        if (bo.notes) local.notes = bo.notes;
+        if (bo.status && bo.status !== local.status) {
+          applyStatusChange(local, bo.status); // reuses the real transition logic, not a raw overwrite
+        }
+      });
+    }
+
+    if (journalRes.ok) {
+      const backendJournal = await journalRes.json();
+      if (backendJournal.length > 0) {
+        journalEntries = backendJournal;
+        journalEntries.forEach(e => {
+          const local = data.find(o => o.id === e.oppId || o.id === e.ticker);
+          if (local) local.journalEntryId = e.id; // re-saving updates instead of duplicating
+        });
+      }
+    }
+  } catch (err) {
+    console.warn("Could not load data from backend — using local defaults.", err);
+  }
+
+  renderChips();
+  renderQueue();
+  renderWorkspace();
+  updateJournalToggleLabel();
+  updateEdgeToggleLabel();
+}
+
+initFromBackend();
+
+// ---------------------------------------------------------------
+// Market-update simulation. Stands in for what will eventually be a
+// real feed re-scoring the queue: new opportunities crossing the
+// threshold, existing scores shifting, and closed-out or stale
+// opportunities dropping off. This is what exercises Section 4's
+// "3 opportunities or 30, threshold-driven, not top-N" requirement,
+// which a fixed array can't demonstrate on its own.
+// ---------------------------------------------------------------
+document.getElementById("simBtn").addEventListener("click", () => {
+  // Time passes for every open opportunity on every click, regardless of
+  // which random event fires below. This is what makes Catalyst freshness
+  // (and Conviction with it) visibly decay for whatever you're currently
+  // looking at — the random event alone was too sparse and too scattered
+  // across tickers to reliably show that mechanic working.
+  data.forEach(o => {
+    if (o.pendingAnalysis || o.status === "Reject") return;
+    o.daysToCatalyst = (o.daysToCatalyst ?? 15) - 1;
+    if (o.tradeQuality) o.conviction = evaluateConviction(o);
+  });
+
+  const roll = Math.random();
+
+  if (roll < 0.45) {
+    // Inject a new threshold-flagged opportunity.
+    const fresh = generateMockOpportunity();
+    if (fresh) {
+      data.push(fresh);
+      newIds.add(fresh.id);
+      selectedId = fresh.id;
+    }
+  } else if (roll < 0.85) {
+    // Mutate an existing opportunity, as if re-scored on new data.
+    // Both scores are now recomputed from perturbed drivers via their
+    // respective engines, not nudged directly.
+    const candidates = data.filter(o => o.status !== "Reject" && o.status !== "Closed");
+    if (candidates.length > 0) {
+      const target = candidates[randInt(0, candidates.length - 1)];
+
+      const oppShiftCount = randInt(1, 3);
+      for (let i = 0; i < oppShiftCount; i++) {
+        const di = randInt(0, target.oppDrivers.length - 1);
+        const [name, val] = target.oppDrivers[di];
+        target.oppDrivers[di] = [name, Math.max(0, Math.min(100, val + randInt(-12, 12)))];
+      }
+      target.opportunityScore = computeOpportunityScore(target.oppDrivers);
+
+      const volShiftCount = randInt(1, 3);
+      for (let i = 0; i < volShiftCount; i++) {
+        const di = randInt(0, target.volDrivers.length - 1);
+        const [name, val] = target.volDrivers[di];
+        target.volDrivers[di] = [name, Math.max(0, Math.min(100, val + randInt(-12, 12)))];
+      }
+      target.volatilityScore = computeVolatilityScore(target.volDrivers);
+      target.ivRank = Math.max(5, Math.min(95, (target.ivRank ?? 50) + randInt(-10, 10)));
+      target.volBias = deriveVolBias(target.ivRank);
+      target.daysToCatalyst = (target.daysToCatalyst ?? 15) - randInt(1, 3);
+
+      if (!target.pendingAnalysis && target.status !== "Reject") {
+        target.tradeConstruction = constructTrade(target);
+        target.suggestedTrade = target.tradeConstruction.recommended.name;
+        target.tradeQuality = evaluateTradeQuality(target);
+        target.conviction = evaluateConviction(target);
+      }
+
+      target.lastUpdated = nowStamp();
+      flashIds.add(target.id);
+    }
+  } else {
+    // Drop an opportunity that no longer clears the threshold.
+    const droppable = data.filter(o => o.status === "New" || o.status === "Watchlist");
+    if (droppable.length > 0) {
+      const target = droppable[randInt(0, droppable.length - 1)];
+      const idx = data.findIndex(o => o.id === target.id);
+      data.splice(idx, 1);
+      if (selectedId === target.id) {
+        selectedId = data.length > 0 ? data[0].id : null;
+      }
+    }
+  }
+
+  renderChips();
+  renderQueue();
+  renderWorkspace();
+});
+</script>
+</body>
+</html>
