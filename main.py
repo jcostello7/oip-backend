@@ -30,6 +30,7 @@ import urllib.request
 import urllib.error
 import json
 import math
+import re
 from datetime import date, timedelta
 
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
@@ -266,6 +267,118 @@ def _fetch_json(url):
         raise HTTPException(status_code=502, detail=f"Massive API returned {e.code}: {body}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not reach Massive API: {str(e)}")
+
+
+def parse_occ_ticker(occ_ticker):
+    """Parses a standard OCC-format option ticker, e.g. 'O:AAPL260904C00110000'
+    -> symbol, expiration date, strike, call/put. Used instead of trusting
+    specific reference-endpoint field names, since ticker format is a
+    fixed, well-known standard regardless of which endpoint returns it."""
+    m = re.match(r"^O:([A-Z]+)(\d{6})([CP])(\d{8})$", occ_ticker)
+    if not m:
+        return None
+    symbol, date_str, cp, strike_str = m.groups()
+    yy, mm, dd = date_str[0:2], date_str[2:4], date_str[4:6]
+    return {
+        "symbol": symbol,
+        "expiration_date": f"20{yy}-{mm}-{dd}",
+        "strike": int(strike_str) / 1000.0,
+        "type": "call" if cp == "C" else "put"
+    }
+
+
+def norm_cdf(x):
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+
+def bs_call_price(S, K, T, r, sigma):
+    if sigma <= 0 or T <= 0:
+        return max(0, S - K)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+
+
+def implied_vol_bisection(market_price, S, K, T, r, tol=1e-6, max_iter=100):
+    """Solves for the volatility that makes Black-Scholes agree with a
+    real observed market price. Round-trip tested against a known
+    synthetic volatility before this ever touched live data."""
+    low, high = 0.001, 5.0
+    mid = (low + high) / 2
+    for _ in range(max_iter):
+        mid = (low + high) / 2
+        price = bs_call_price(S, K, T, r, mid)
+        if abs(price - market_price) < tol:
+            return mid
+        if price < market_price:
+            low = mid
+        else:
+            high = mid
+    return mid
+
+
+RISK_FREE_RATE = 0.045  # approximate — short-dated ATM IV is not very sensitive to this
+
+
+@app.get("/api/real-iv-check/{ticker}")
+def real_iv_check(ticker: str, session: dict = Depends(require_auth)):
+    """Real implied volatility computed by us via Black-Scholes inversion
+    on a real, near-term, at-the-money option's actual EOD closing price
+    — entirely on Options Basic (free). No snapshot/greeks endpoint
+    (which needs Starter, $29/mo) involved anywhere in this path."""
+    price_url = f"https://api.massive.com/v2/aggs/ticker/{ticker.upper()}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}"
+    price_payload = _fetch_json(price_url)
+    stock_results = price_payload.get("results", [])
+    if not stock_results:
+        raise HTTPException(status_code=502, detail=f"No stock price available for {ticker.upper()}")
+    underlying_price = stock_results[0]["c"]
+
+    ref_url = (f"https://api.massive.com/v3/reference/options/contracts"
+               f"?underlying_ticker={ticker.upper()}&contract_type=call&limit=1000&apiKey={MASSIVE_API_KEY}")
+    ref_payload = _fetch_json(ref_url)
+    contracts = ref_payload.get("results", [])
+    if not contracts:
+        raise HTTPException(status_code=502, detail=f"No option contracts found for {ticker.upper()}")
+
+    today = date.today()
+    candidates = []
+    for c in contracts:
+        parsed = parse_occ_ticker(c["ticker"])
+        if not parsed:
+            continue
+        exp_date = date.fromisoformat(parsed["expiration_date"])
+        days_out = (exp_date - today).days
+        if 15 <= days_out <= 60:  # avoid 0DTE noise, avoid too-far-out illiquid contracts
+            candidates.append((exp_date, parsed, c["ticker"]))
+
+    if not candidates:
+        raise HTTPException(status_code=502, detail="No contracts found in the 15-60 day window")
+
+    nearest_exp = min(c[0] for c in candidates)
+    same_exp = [c for c in candidates if c[0] == nearest_exp]
+    exp_date, parsed, contract_ticker = min(same_exp, key=lambda c: abs(c[1]["strike"] - underlying_price))
+
+    opt_price_url = f"https://api.massive.com/v2/aggs/ticker/{contract_ticker}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}"
+    opt_price_payload = _fetch_json(opt_price_url)
+    opt_results = opt_price_payload.get("results", [])
+    if not opt_results:
+        raise HTTPException(status_code=502, detail=f"No price history for contract {contract_ticker}")
+    option_market_price = opt_results[0]["c"]
+
+    T = (exp_date - today).days / 365.0
+    computed_iv = implied_vol_bisection(option_market_price, underlying_price, parsed["strike"], T, RISK_FREE_RATE)
+
+    return {
+        "ticker": ticker.upper(),
+        "underlyingPrice": underlying_price,
+        "contract": contract_ticker,
+        "strike": parsed["strike"],
+        "expiration": parsed["expiration_date"],
+        "daysToExpiration": (exp_date - today).days,
+        "optionMarketPrice": option_market_price,
+        "impliedVolatilityPct": round(computed_iv * 100, 2),
+        "method": "Black-Scholes inversion on real EOD option price — Options Basic only, no paid tier"
+    }
 
 
 def find_atm_near_term_iv(results, today, min_days_out=5):
