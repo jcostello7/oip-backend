@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db, engine
 import models
+from seed_data import SEED_OPPORTUNITIES, SEED_JOURNAL_ENTRIES
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
@@ -170,6 +171,54 @@ def tables_check(session: dict = Depends(require_auth), db: Session = Depends(ge
     ))
     tables = [row[0] for row in result]
     return {"tables": tables}
+
+
+@app.post("/api/seed")
+def seed(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """One-time seed of the same mock data the frontend already trusts.
+    Idempotent — does nothing if opportunities already exist, so it's
+    safe to call more than once (e.g. after a redeploy)."""
+    existing = db.query(models.Opportunity).count()
+    if existing > 0:
+        return {"seeded": False, "reason": "opportunities table already has data", "count": existing}
+
+    for opp in SEED_OPPORTUNITIES:
+        db.add(models.Opportunity(**opp))
+    for entry in SEED_JOURNAL_ENTRIES:
+        db.add(models.JournalEntry(**entry))
+    db.commit()
+    return {"seeded": True, "opportunities": len(SEED_OPPORTUNITIES), "journal_entries": len(SEED_JOURNAL_ENTRIES)}
+
+
+@app.get("/api/opportunities")
+def list_opportunities(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    opps = db.query(models.Opportunity).all()
+    return [
+        {
+            "id": o.id, "sector": o.sector, "status": o.status,
+            "opportunityScore": o.opportunity_score, "volatilityScore": o.volatility_score,
+            "volBias": o.vol_bias, "ivRank": o.iv_rank, "directionalLean": o.directional_lean,
+            "suggestedTrade": o.suggested_trade, "thesis": o.thesis, "notes": o.notes,
+            "pendingAnalysis": o.pending_analysis,
+        }
+        for o in opps
+    ]
+
+
+@app.get("/api/journal")
+def list_journal(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    entries = db.query(models.JournalEntry).all()
+    return [
+        {
+            "id": e.id, "ticker": e.ticker, "sector": e.sector, "loggedDate": e.logged_date,
+            "statusAtLog": e.status_at_log, "opportunityScore": e.opportunity_score,
+            "volatilityScore": e.volatility_score, "tradeQualityComposite": e.trade_quality_composite,
+            "convictionComposite": e.conviction_composite, "structure": e.structure,
+            "outcome": e.outcome, "realizedPnL": e.realized_pnl, "lessonsLearned": e.lessons_learned,
+            "regimeAtLog": e.regime_at_log, "daysToCatalystAtLog": e.days_to_catalyst_at_log,
+        }
+        for e in entries
+    ]
 
 
 # ---------------------------------------------------------------
