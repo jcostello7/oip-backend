@@ -29,7 +29,8 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import get_db, engine
+import models
 
 SECRET_KEY = os.environ.get("SECRET_KEY")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
@@ -45,6 +46,15 @@ SESSION_MAX_AGE = 60 * 60 * 24 * 14  # 14 days
 serializer = URLSafeTimedSerializer(SECRET_KEY)
 
 app = FastAPI(title="OIP Backend")
+
+
+@app.on_event("startup")
+def create_tables():
+    # Idempotent — creates tables if they don't exist, does nothing if
+    # they already do. Fine at this scale; a real migration tool
+    # (Alembic) is a later refinement if the schema needs to evolve
+    # without risking existing data.
+    models.Base.metadata.create_all(bind=engine)
 
 
 def hash_password(password: str) -> str:
@@ -149,6 +159,17 @@ def db_check(session: dict = Depends(require_auth), db: Session = Depends(get_db
     code imports cleanly. Runs a trivial query and returns its result."""
     result = db.execute(text("SELECT 1")).scalar()
     return {"db_connected": True, "result": result}
+
+
+@app.get("/api/tables-check")
+def tables_check(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """Queries Postgres's own catalog to confirm the tables genuinely
+    exist — not just that create_all() ran without raising."""
+    result = db.execute(text(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name"
+    ))
+    tables = [row[0] for row in result]
+    return {"tables": tables}
 
 
 # ---------------------------------------------------------------
