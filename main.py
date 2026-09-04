@@ -257,6 +257,106 @@ def hv_check(ticker: str, session: dict = Depends(require_auth)):
     }
 
 
+def _fetch_json(url):
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(status_code=502, detail=f"Massive API returned {e.code}: {body}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Massive API: {str(e)}")
+
+
+def find_atm_near_term_iv(results, today, min_days_out=5):
+    """Given a list of option contracts (Massive's chain snapshot shape),
+    picks the nearest expiration at least min_days_out away, then the
+    strike closest to the underlying's current price at that expiration.
+    Tested against a synthetic version of Massive's documented response
+    shape before ever touching the live endpoint."""
+    underlying_price = None
+    for r in results:
+        price = r.get("underlying_asset", {}).get("price")
+        if price:
+            underlying_price = price
+            break
+    if underlying_price is None:
+        return None
+
+    candidates = []
+    for r in results:
+        exp_str = r.get("details", {}).get("expiration_date")
+        iv = r.get("implied_volatility")
+        strike = r.get("details", {}).get("strike_price")
+        if not exp_str or iv is None or strike is None:
+            continue
+        exp_date = date.fromisoformat(exp_str)
+        if (exp_date - today).days >= min_days_out:
+            candidates.append((exp_date, r))
+    if not candidates:
+        return None
+
+    nearest_exp = min(c[0] for c in candidates)
+    same_exp = [r for exp, r in candidates if exp == nearest_exp]
+    atm = min(same_exp, key=lambda r: abs(r["details"]["strike_price"] - underlying_price))
+    return {
+        "underlyingPrice": underlying_price,
+        "expiration": nearest_exp.isoformat(),
+        "strike": atm["details"]["strike_price"],
+        "impliedVolatilityPct": round(atm["implied_volatility"] * 100, 2)
+    }
+
+
+@app.get("/api/iv-check/{ticker}")
+def iv_check(ticker: str, session: dict = Depends(require_auth)):
+    """Pulls the real options chain and extracts IV from the nearest
+    at-the-money, near-term contract — the standard practical proxy
+    for 'current IV level' without needing a full vol surface."""
+    url = f"https://api.massive.com/v3/snapshot/options/{ticker.upper()}?contract_type=call&limit=250&apiKey={MASSIVE_API_KEY}"
+    payload = _fetch_json(url)
+    results = payload.get("results", [])
+    if not results:
+        raise HTTPException(status_code=502, detail=f"No options contracts returned for {ticker.upper()}")
+
+    match = find_atm_near_term_iv(results, date.today())
+    if not match:
+        raise HTTPException(status_code=502, detail="Could not find a suitable near-term, at-the-money contract")
+
+    return {"ticker": ticker.upper(), **match}
+
+
+@app.get("/api/vol-bias-check/{ticker}")
+def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
+    """The real version of the IV-vs-HV spread we settled on for
+    Volatility Bias — both halves pulled from real Massive data in one
+    call. High IV rich vs. HV -> Short Vol lean; cheap -> Long Vol."""
+    hv_result = hv_check(ticker, session)
+    iv_url = f"https://api.massive.com/v3/snapshot/options/{ticker.upper()}?contract_type=call&limit=250&apiKey={MASSIVE_API_KEY}"
+    iv_payload = _fetch_json(iv_url)
+    iv_results = iv_payload.get("results", [])
+    iv_match = find_atm_near_term_iv(iv_results, date.today()) if iv_results else None
+    if not iv_match:
+        raise HTTPException(status_code=502, detail=f"Could not compute IV for {ticker.upper()}")
+
+    hv_pct = hv_result["historicalVolatilityPct"]
+    iv_pct = iv_match["impliedVolatilityPct"]
+    spread = round(iv_pct - hv_pct, 2)
+    if spread > 3:
+        bias = "Short Vol"
+    elif spread < -3:
+        bias = "Long Vol"
+    else:
+        bias = "Neutral"
+
+    return {
+        "ticker": ticker.upper(),
+        "historicalVolatilityPct": hv_pct,
+        "impliedVolatilityPct": iv_pct,
+        "spread": spread,
+        "volBias": bias
+    }
+
+
 @app.post("/api/seed")
 def seed(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
     """One-time seed of the same mock data the frontend already trusts.
