@@ -221,6 +221,51 @@ def real_regime_check(etf_ticker: str, session: dict = Depends(require_auth)):
     return {"ticker": etf_ticker.upper(), "latestClose": latest_close, "fiveDayChangePct": pct_change}
 
 
+@app.get("/api/real-technicals-check/{ticker}")
+def real_technicals_check(ticker: str, session: dict = Depends(require_auth)):
+    """Real Relative Volume and Momentum from one real price-history
+    call — reuses the same aggregates endpoint already proven for HV
+    and Regime. RVOL = latest day's volume vs. the trailing average.
+    Momentum = 10-trading-day % price change, using absolute value —
+    a big move in either direction is equally 'worth a look' for
+    Opportunity Score, which measures attention-worthiness, not
+    direction; that's what Directional Lean and Volatility Bias are
+    for separately."""
+    end = date.today()
+    start = end - timedelta(days=60)
+    url = (f"https://api.massive.com/v2/aggs/ticker/{ticker.upper()}/range/1/day/"
+           f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+    payload = _fetch_json(url)
+    results = payload.get("results", [])
+    if len(results) < 15:
+        raise HTTPException(status_code=502, detail=f"Not enough price history for {ticker.upper()} to compute technicals")
+
+    volumes = [bar["v"] for bar in results]
+    closes = [bar["c"] for bar in results]
+
+    latest_volume = volumes[-1]
+    baseline_volumes = volumes[:-1][-20:]
+    avg_volume = sum(baseline_volumes) / len(baseline_volumes)
+    rvol = latest_volume / avg_volume if avg_volume > 0 else 1.0
+
+    lookback = min(10, len(closes) - 1)
+    ten_day_return_pct = round(((closes[-1] - closes[-1 - lookback]) / closes[-1 - lookback]) * 100, 2)
+
+    rvol_score = max(10, min(95, round(50 + (rvol - 1) * 40)))
+    momentum_score = max(10, min(95, round(50 + abs(ten_day_return_pct) * 3)))
+
+    return {
+        "ticker": ticker.upper(),
+        "latestVolume": latest_volume,
+        "averageVolume": round(avg_volume),
+        "relativeVolume": round(rvol, 2),
+        "relativeVolumeScore": rvol_score,
+        "lookbackDays": lookback,
+        "priceChangePct": ten_day_return_pct,
+        "momentumScore": momentum_score
+    }
+
+
 @app.get("/api/market-check")
 def market_check(session: dict = Depends(require_auth)):
     """Proves the app can reach real market data — the first real test
@@ -553,6 +598,7 @@ def migrate_add_real_volatility(session: dict = Depends(require_auth), db: Sessi
     IF NOT EXISTS makes every statement here a no-op after it's applied."""
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_volatility JSON"))
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_regime JSON"))
+    db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_technicals JSON"))
     db.commit()
     return {"migrated": True}
 
@@ -567,7 +613,7 @@ def list_opportunities(session: dict = Depends(require_auth), db: Session = Depe
             "volBias": o.vol_bias, "ivRank": o.iv_rank, "directionalLean": o.directional_lean,
             "suggestedTrade": o.suggested_trade, "thesis": o.thesis, "notes": o.notes,
             "pendingAnalysis": o.pending_analysis, "price": o.price, "realVolatility": o.real_volatility,
-            "realRegime": o.real_regime,
+            "realRegime": o.real_regime, "realTechnicals": o.real_technicals,
         }
         for o in opps
     ]
@@ -596,6 +642,7 @@ class OpportunityUpdate(BaseModel):
     volBias: Optional[str] = None
     realVolatility: Optional[dict] = None
     realRegime: Optional[dict] = None
+    realTechnicals: Optional[dict] = None
 
 
 @app.patch("/api/opportunities/{opp_id}")
@@ -620,6 +667,8 @@ def update_opportunity(opp_id: str, update: OpportunityUpdate,
         opp.real_volatility = update.realVolatility
     if update.realRegime is not None:
         opp.real_regime = update.realRegime
+    if update.realTechnicals is not None:
+        opp.real_technicals = update.realTechnicals
     db.commit()
     return {"updated": True, "id": opp_id, "status": opp.status, "notes": opp.notes}
 

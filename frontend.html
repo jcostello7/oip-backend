@@ -1092,6 +1092,70 @@ async function fetchRealRegime(o) {
   }
 }
 
+// Pure mutation logic for applying real Relative Volume / Momentum —
+// same extraction pattern as applyRealVolatility/applyRealRegime.
+function applyRealTechnicals(o, real) {
+  o.realTechnicals = { ...real, fetchedAt: real.fetchedAt || nowStamp() };
+
+  const rvolIdx = o.oppDrivers.findIndex(([name]) => name === "Relative volume");
+  if (rvolIdx >= 0) o.oppDrivers[rvolIdx] = ["Relative volume", real.relativeVolumeScore];
+  else o.oppDrivers.push(["Relative volume", real.relativeVolumeScore]);
+
+  const momIdx = o.oppDrivers.findIndex(([name]) => name === "Momentum");
+  if (momIdx >= 0) o.oppDrivers[momIdx] = ["Momentum", real.momentumScore];
+  else o.oppDrivers.push(["Momentum", real.momentumScore]);
+
+  o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+
+  if (!o.pendingAnalysis && o.status !== "Reject" && o.volBias !== "Neutral") {
+    o.tradeConstruction = constructTrade(o);
+    o.suggestedTrade = o.tradeConstruction.recommended.name;
+    o.tradeQuality = evaluateTradeQuality(o);
+    o.conviction = evaluateConviction(o);
+  }
+  o.lastUpdated = nowStamp();
+}
+
+// Pulls real Relative Volume and Momentum from one real price-history
+// call. One call, not two — both signals come from the same
+// aggregates response, which matters on a 5-calls/min ceiling.
+async function fetchRealTechnicals(o) {
+  const statusEl = document.getElementById("realTechnicalsStatus");
+  const btn = document.getElementById("fetchRealTechnicalsBtn");
+  if (statusEl) statusEl.textContent = "Fetching real data from Massive…";
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/real-technicals-check/${encodeURIComponent(o.id)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const detail = err.detail || `Request failed (HTTP ${res.status})`;
+      if (res.status === 429 || detail.includes("429")) {
+        throw new Error("Rate limited by Massive (5 calls/min on the free tier) — wait a moment and try again.");
+      }
+      throw new Error(detail);
+    }
+    const result = await res.json();
+    applyRealTechnicals(o, {
+      relativeVolume: result.relativeVolume, relativeVolumeScore: result.relativeVolumeScore,
+      priceChangePct: result.priceChangePct, momentumScore: result.momentumScore
+    });
+
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ realTechnicals: o.realTechnicals })
+    }).catch(err => console.warn("Real technicals fetched but failed to sync to backend:", err));
+
+    renderQueue();
+    renderWorkspace();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Failed: " + err.message;
+    if (btn) btn.disabled = false;
+    console.warn("Real technicals fetch failed:", err);
+  }
+}
+
 // Pure mutation logic for a status change — extracted so it's shared
 // between the UI's status dropdown and the startup merge (applying a
 // status that was persisted to the backend on a previous visit needs
@@ -2189,6 +2253,9 @@ function renderWorkspace() {
       <div class="driver-group-label">Opportunity Score Engine <span class="driver-group-note">(weights approved)</span></div>
       <div class="drivers">${weightedDriverRows(o.oppDrivers, OPP_WEIGHT_MAP, "opportunity score")}</div>
       <div class="updated-tag" style="margin-top:6px;">Liquidity here is a coarse tradeability gate — Trade Quality Score (Phase 5) re-checks liquidity at the specific structure and strikes.</div>
+      <button class="sim-btn" id="fetchRealTechnicalsBtn" style="margin-top:10px;">${o.realTechnicals ? 'Refresh real Relative Volume / Momentum' : 'Get real Relative Volume / Momentum'} <span class="driver-group-note">(1 call)</span></button>
+      <div id="realTechnicalsStatus" class="updated-tag" style="margin-top:6px;"></div>
+      ${o.realTechnicals ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realTechnicals.fetchedAt} — real RVOL ${o.realTechnicals.relativeVolume}x, ${o.realTechnicals.priceChangePct >= 0 ? '+' : ''}${o.realTechnicals.priceChangePct}% over 10 trading days.</div>` : ''}
       <div class="driver-group-label" style="margin-top:18px;">Volatility Opportunity Engine <span class="driver-group-note">(Section 7 weights)</span></div>
       <div class="drivers">${weightedDriverRows(o.volDrivers, VOL_WEIGHT_MAP, "volatility score")}</div>
     </section>
@@ -2259,6 +2326,8 @@ function renderWorkspace() {
   if (fetchRealVolBtn) fetchRealVolBtn.addEventListener("click", () => fetchRealVolatility(o));
   const fetchRealRegimeBtn = document.getElementById("fetchRealRegimeBtn");
   if (fetchRealRegimeBtn) fetchRealRegimeBtn.addEventListener("click", () => fetchRealRegime(o));
+  const fetchRealTechnicalsBtn = document.getElementById("fetchRealTechnicalsBtn");
+  if (fetchRealTechnicalsBtn) fetchRealTechnicalsBtn.addEventListener("click", () => fetchRealTechnicals(o));
 
   const journalOutcomeEl = document.getElementById("journalOutcome");
   if (journalOutcomeEl) journalOutcomeEl.addEventListener("change", (e) => { getJournalDraft(o).outcome = e.target.value; });
@@ -2491,6 +2560,15 @@ async function initFromBackend() {
             marketTicker: bo.realRegime.marketTicker,
             marketChangePct: bo.realRegime.marketChangePct,
             fetchedAt: bo.realRegime.fetchedAt
+          });
+        }
+        if (bo.realTechnicals) {
+          applyRealTechnicals(local, {
+            relativeVolume: bo.realTechnicals.relativeVolume,
+            relativeVolumeScore: bo.realTechnicals.relativeVolumeScore,
+            priceChangePct: bo.realTechnicals.priceChangePct,
+            momentumScore: bo.realTechnicals.momentumScore,
+            fetchedAt: bo.realTechnicals.fetchedAt
           });
         }
       });

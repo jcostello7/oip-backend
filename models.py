@@ -35,6 +35,7 @@ class Opportunity(Base):
     directional_lean = Column(String)
     real_volatility = Column(JSON, nullable=True)  # {historicalVolatilityPct, impliedVolatilityPct, spread, fetchedAt}
     real_regime = Column(JSON, nullable=True)  # {sectorTicker, sectorChangePct, marketTicker, marketChangePct, fetchedAt}
+    real_technicals = Column(JSON, nullable=True)  # {relativeVolume, relativeVolumeScore, priceChangePct, momentumScore, fetchedAt}
 
     price = Column(Float)
     historical_move_pct = Column(Float)
