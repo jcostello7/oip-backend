@@ -493,6 +493,7 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
 
     return {
         "ticker": ticker.upper(),
+        "price": iv_result["underlyingPrice"],
         "historicalVolatilityPct": hv_pct,
         "impliedVolatilityPct": iv_pct,
         "ivContract": iv_result["contract"],

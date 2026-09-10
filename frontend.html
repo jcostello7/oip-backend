@@ -934,6 +934,59 @@ function ageOpportunityCatalyst(o) {
   o.lastUpdated = nowStamp();
 }
 
+// Pulls real price + real Volatility Bias (IV-vs-HV spread) from the
+// backend for one ticker. Deliberately per-ticker, not automatic —
+// the free Massive tier is 5 calls/min and this endpoint alone makes
+// 3 real calls, so auto-refreshing the whole queue isn't viable.
+// Volatility Score's composite magnitude stays mock; only bias
+// direction and price get replaced with real data here.
+async function fetchRealVolatility(o) {
+  const statusEl = document.getElementById("realVolStatus");
+  const btn = document.getElementById("fetchRealVolBtn");
+  if (statusEl) statusEl.textContent = "Fetching real data from Massive…";
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/vol-bias-check/${encodeURIComponent(o.id)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const detail = err.detail || `Request failed (HTTP ${res.status})`;
+      if (res.status === 429 || detail.includes("429")) {
+        throw new Error("Rate limited by Massive (5 calls/min on the free tier) — wait a moment and try again.");
+      }
+      throw new Error(detail);
+    }
+    const result = await res.json();
+
+    o.price = result.price;
+    o.volBias = result.volBias;
+    o.realVolatility = {
+      historicalVolatilityPct: result.historicalVolatilityPct,
+      impliedVolatilityPct: result.impliedVolatilityPct,
+      spread: result.spread,
+      fetchedAt: nowStamp()
+    };
+
+    // Re-run everything downstream of volBias so the pipeline stays
+    // internally consistent — same pattern used by applyStatusChange
+    // and the simulate-mutation branch.
+    if (!o.pendingAnalysis && o.status !== "Reject") {
+      o.tradeConstruction = constructTrade(o);
+      o.suggestedTrade = o.tradeConstruction.recommended.name;
+      o.tradeQuality = evaluateTradeQuality(o);
+      o.conviction = evaluateConviction(o);
+    }
+    o.lastUpdated = nowStamp();
+
+    renderQueue();
+    renderWorkspace();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Failed: " + err.message;
+    if (btn) btn.disabled = false;
+    console.warn("Real volatility fetch failed:", err);
+  }
+}
+
 // Pure mutation logic for a status change — extracted so it's shared
 // between the UI's status dropdown and the startup merge (applying a
 // status that was persisted to the backend on a previous visit needs
@@ -1987,7 +2040,7 @@ function renderWorkspace() {
       <div class="score-block">
         <div class="score-label">Volatility score</div>
         <div class="score-value">${o.volatilityScore}</div>
-        <div class="bias-tag"><span class="bias-dot" style="background:${biasDotColor(o.volBias)}"></span>${o.volBias} <span class="driver-weight">IV Rank ${o.ivRank}</span></div>
+        <div class="bias-tag"><span class="bias-dot" style="background:${biasDotColor(o.volBias)}"></span>${o.volBias} <span class="driver-weight">${o.realVolatility ? `IV ${o.realVolatility.impliedVolatilityPct}% vs HV ${o.realVolatility.historicalVolatilityPct}%` : 'IV Rank ' + o.ivRank}</span></div>
       </div>
       <div class="score-block">
         <div class="score-label">Trade quality</div>
@@ -2001,6 +2054,15 @@ function renderWorkspace() {
         <div class="score-label">Suggested trade</div>
         <div class="score-value small">${o.suggestedTrade}</div>
       </div>
+    </div>
+
+    <div class="trade-card" style="margin-top:0;">
+      <div class="tc-top">
+        <span class="tc-name">Real data <span class="driver-group-note">(Massive — free tier, 5 calls/min)</span></span>
+      </div>
+      <button class="sim-btn" id="fetchRealVolBtn">${o.realVolatility ? 'Refresh real volatility' : 'Get real volatility'}</button>
+      <div id="realVolStatus" class="updated-tag" style="margin-top:8px;"></div>
+      ${o.realVolatility ? `<div class="updated-tag" style="margin-top:6px;">Pulled ${o.realVolatility.fetchedAt}. Price and volatility bias are real — Volatility Score's composite (${o.volatilityScore}) is still mock, since five of its seven factors don't have a real data source wired in yet.</div>` : `<div class="updated-tag" style="margin-top:6px;">Not yet checked against real data — everything below is still illustrative.</div>`}
     </div>
 
     ${regimeHtml}
@@ -2085,6 +2147,8 @@ function renderWorkspace() {
   if (clearLegsBtn) clearLegsBtn.addEventListener("click", () => { clearCustomLegs(o.id); renderWorkspace(); });
   const ageCatalystBtn = document.getElementById("ageCatalystBtn");
   if (ageCatalystBtn) ageCatalystBtn.addEventListener("click", () => { ageOpportunityCatalyst(o); renderWorkspace(); });
+  const fetchRealVolBtn = document.getElementById("fetchRealVolBtn");
+  if (fetchRealVolBtn) fetchRealVolBtn.addEventListener("click", () => fetchRealVolatility(o));
 
   const journalOutcomeEl = document.getElementById("journalOutcome");
   if (journalOutcomeEl) journalOutcomeEl.addEventListener("change", (e) => { getJournalDraft(o).outcome = e.target.value; });
