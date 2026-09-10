@@ -34,6 +34,7 @@ class Opportunity(Base):
     regime = Column(JSON)  # sector/market proxy context
     directional_lean = Column(String)
     real_volatility = Column(JSON, nullable=True)  # {historicalVolatilityPct, impliedVolatilityPct, spread, fetchedAt}
+    real_regime = Column(JSON, nullable=True)  # {sectorTicker, sectorChangePct, marketTicker, marketChangePct, fetchedAt}
 
     price = Column(Float)
     historical_move_pct = Column(Float)

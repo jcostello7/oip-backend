@@ -892,8 +892,11 @@ function evaluateConviction(o) {
   if (!o.tradeQuality) return null;
 
   const technicalDriver = (o.oppDrivers.find(([n]) => n === "Trend / technical structure") || [null, 50])[1];
-  const regimeNow = getRegimeContext(o.sector);
-  const regimeScore = regimeAlignmentValue(regimeNow);
+  // Use the opportunity's actual current regime read (real, if it's
+  // been fetched; mock otherwise) — not a freshly recomputed mock
+  // value that would silently ignore any real data already applied.
+  const regimeNow = o.regime || getRegimeContext(o.sector);
+  const regimeScore = o.realRegime ? realRegimeAlignmentValue(o.regime.sectorChange) : regimeAlignmentValue(regimeNow);
   const catalystScore = catalystFreshnessScore(o.daysToCatalyst);
 
   const scores = {
@@ -997,6 +1000,95 @@ async function fetchRealVolatility(o) {
     if (statusEl) statusEl.textContent = "Failed: " + err.message;
     if (btn) btn.disabled = false;
     console.warn("Real volatility fetch failed:", err);
+  }
+}
+
+// Deterministic mapping from a real 5-day % change to a 0-100 driver
+// value — unlike the mock regimeAlignmentValue (which uses randInt for
+// simulated variety across mock opportunities), real data should
+// produce the same score given the same real input every time.
+function realRegimeAlignmentValue(pctChange) {
+  return Math.max(10, Math.min(95, Math.round(65 + pctChange * 15)));
+}
+
+// Pure mutation logic for applying real regime data — same extraction
+// pattern as applyRealVolatility, shared between the live button and
+// the startup merge.
+function applyRealRegime(o, real) {
+  const sectorFlag = computeShockFlag(real.sectorChangePct);
+  const marketFlag = computeShockFlag(real.marketChangePct);
+  o.regime = {
+    sectorTicker: real.sectorTicker, sectorChange: real.sectorChangePct, sectorFlag,
+    marketTicker: real.marketTicker, marketChange: real.marketChangePct, marketFlag
+  };
+  o.realRegime = { ...real, fetchedAt: real.fetchedAt || nowStamp() };
+
+  const val = realRegimeAlignmentValue(real.sectorChangePct);
+  const idx = o.oppDrivers.findIndex(([name]) => name === "Market regime alignment");
+  if (idx >= 0) o.oppDrivers[idx] = ["Market regime alignment", val];
+  else o.oppDrivers.push(["Market regime alignment", val]);
+  o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+
+  if (!o.pendingAnalysis && o.status !== "Reject" && o.volBias !== "Neutral") {
+    o.tradeConstruction = constructTrade(o);
+    o.suggestedTrade = o.tradeConstruction.recommended.name;
+    o.tradeQuality = evaluateTradeQuality(o);
+    o.conviction = evaluateConviction(o);
+  }
+  o.lastUpdated = nowStamp();
+}
+
+// Pulls real 5-day % change for the opportunity's sector proxy ETF and
+// the market proxy (SPY) — 2 real calls, on top of whatever else has
+// already been fetched this minute, so this stays a deliberate,
+// per-ticker action, same rate-limit reasoning as volatility.
+async function fetchRealRegime(o) {
+  const statusEl = document.getElementById("realRegimeStatus");
+  const btn = document.getElementById("fetchRealRegimeBtn");
+  if (statusEl) statusEl.textContent = "Fetching real data from Massive…";
+  if (btn) btn.disabled = true;
+
+  const sectorTicker = SECTOR_PROXY[o.sector] || MARKET_PROXY;
+
+  try {
+    const [sectorRes, marketRes] = await Promise.all([
+      fetch(`/api/real-regime-check/${sectorTicker}`),
+      fetch(`/api/real-regime-check/${MARKET_PROXY}`)
+    ]);
+
+    async function unwrap(res) {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        const detail = err.detail || `Request failed (HTTP ${res.status})`;
+        if (res.status === 429 || detail.includes("429")) {
+          throw new Error("Rate limited by Massive (5 calls/min on the free tier) — wait a moment and try again.");
+        }
+        throw new Error(detail);
+      }
+      return res.json();
+    }
+
+    const sectorResult = await unwrap(sectorRes);
+    const marketResult = await unwrap(marketRes);
+
+    const real = {
+      sectorTicker: sectorResult.ticker, sectorChangePct: sectorResult.fiveDayChangePct,
+      marketTicker: marketResult.ticker, marketChangePct: marketResult.fiveDayChangePct
+    };
+    applyRealRegime(o, real);
+
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ realRegime: o.realRegime })
+    }).catch(err => console.warn("Real regime fetched but failed to sync to backend:", err));
+
+    renderQueue();
+    renderWorkspace();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Failed: " + err.message;
+    if (btn) btn.disabled = false;
+    console.warn("Real regime fetch failed:", err);
   }
 }
 
@@ -2014,6 +2106,7 @@ function renderWorkspace() {
   let regimeHtml = "";
   if (o.regime) {
     const r = o.regime;
+    const isReal = !!o.realRegime;
     regimeHtml = `
       <div class="position-panel">
         <div class="pp-item">
@@ -2027,8 +2120,10 @@ function renderWorkspace() {
           <div class="updated-tag">${r.marketChange >= 0 ? '+' : ''}${r.marketChange}% (5d)</div>
         </div>
         <div class="pp-item" style="flex:1; min-width:200px;">
-          <div class="pp-label">Regime context — Phase 3.5 / 5.5 (mock proxy data)</div>
-          <div class="updated-tag" style="margin-top:6px; line-height:1.5;">Feeds Market regime alignment below. Will also feed Conviction Score's Regime sub-factor once Phase 6 exists.</div>
+          <div class="pp-label">Regime context <span class="driver-group-note">${isReal ? '(real — Massive)' : '(mock proxy data)'}</span></div>
+          <div class="updated-tag" style="margin-top:6px; line-height:1.5;">Feeds Market regime alignment above and Conviction's Regime sub-factor.${isReal ? ` Pulled ${o.realRegime.fetchedAt}.` : ''}</div>
+          <button class="sim-btn" id="fetchRealRegimeBtn" style="margin-top:8px;">${isReal ? 'Refresh real regime' : 'Get real regime'} <span class="driver-group-note">(2 calls)</span></button>
+          <div id="realRegimeStatus" class="updated-tag" style="margin-top:6px;"></div>
         </div>
       </div>`;
   }
@@ -2162,6 +2257,8 @@ function renderWorkspace() {
   if (ageCatalystBtn) ageCatalystBtn.addEventListener("click", () => { ageOpportunityCatalyst(o); renderWorkspace(); });
   const fetchRealVolBtn = document.getElementById("fetchRealVolBtn");
   if (fetchRealVolBtn) fetchRealVolBtn.addEventListener("click", () => fetchRealVolatility(o));
+  const fetchRealRegimeBtn = document.getElementById("fetchRealRegimeBtn");
+  if (fetchRealRegimeBtn) fetchRealRegimeBtn.addEventListener("click", () => fetchRealRegime(o));
 
   const journalOutcomeEl = document.getElementById("journalOutcome");
   if (journalOutcomeEl) journalOutcomeEl.addEventListener("change", (e) => { getJournalDraft(o).outcome = e.target.value; });
@@ -2383,6 +2480,17 @@ async function initFromBackend() {
             impliedVolatilityPct: bo.realVolatility.impliedVolatilityPct,
             spread: bo.realVolatility.spread,
             fetchedAt: bo.realVolatility.fetchedAt
+          });
+        }
+        // Applied last, so its downstream recompute reflects whatever
+        // real volatility bias just landed above, not the mock default.
+        if (bo.realRegime) {
+          applyRealRegime(local, {
+            sectorTicker: bo.realRegime.sectorTicker,
+            sectorChangePct: bo.realRegime.sectorChangePct,
+            marketTicker: bo.realRegime.marketTicker,
+            marketChangePct: bo.realRegime.marketChangePct,
+            fetchedAt: bo.realRegime.fetchedAt
           });
         }
       });

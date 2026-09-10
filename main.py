@@ -198,6 +198,29 @@ def tables_check(session: dict = Depends(require_auth), db: Session = Depends(ge
     return {"tables": tables}
 
 
+@app.get("/api/real-regime-check/{etf_ticker}")
+def real_regime_check(etf_ticker: str, session: dict = Depends(require_auth)):
+    """Real 5-trading-day % price change for a sector or market proxy
+    ETF — replaces the mock PROXY_WEEKLY_CHANGE constants from Phase
+    3.5. Simpler than the volatility work: no options, no inversion,
+    just real aggregates already proven in hv_check."""
+    end = date.today()
+    start = end - timedelta(days=14)
+    url = (f"https://api.massive.com/v2/aggs/ticker/{etf_ticker.upper()}/range/1/day/"
+           f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+    payload = _fetch_json(url)
+    results = payload.get("results", [])
+    if len(results) < 6:
+        raise HTTPException(status_code=502, detail=f"Not enough price history for {etf_ticker.upper()} to compute a 5-day change")
+
+    closes = [bar["c"] for bar in results]
+    latest_close = closes[-1]
+    five_days_ago_close = closes[-6]
+    pct_change = round(((latest_close - five_days_ago_close) / five_days_ago_close) * 100, 2)
+
+    return {"ticker": etf_ticker.upper(), "latestClose": latest_close, "fiveDayChangePct": pct_change}
+
+
 @app.get("/api/market-check")
 def market_check(session: dict = Depends(require_auth)):
     """Proves the app can reach real market data — the first real test
@@ -522,13 +545,14 @@ def seed(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
 
 @app.post("/api/migrate-add-real-volatility")
 def migrate_add_real_volatility(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
-    """One-time schema change — adds the real_volatility column to the
-    already-existing opportunities table. create_all() only creates
-    NEW tables; it never alters ones that already exist, so a genuine
-    schema change like this needs an explicit step until a real
-    migration tool (Alembic) is worth the overhead. Safe to call more
-    than once — IF NOT EXISTS makes it a no-op after the first run."""
+    """One-time schema changes — adds real-data columns to the already-
+    existing opportunities table. create_all() only creates NEW tables;
+    it never alters ones that already exist, so a genuine schema
+    change like this needs an explicit step until a real migration
+    tool (Alembic) is worth the overhead. Safe to call more than once —
+    IF NOT EXISTS makes every statement here a no-op after it's applied."""
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_volatility JSON"))
+    db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_regime JSON"))
     db.commit()
     return {"migrated": True}
 
@@ -543,6 +567,7 @@ def list_opportunities(session: dict = Depends(require_auth), db: Session = Depe
             "volBias": o.vol_bias, "ivRank": o.iv_rank, "directionalLean": o.directional_lean,
             "suggestedTrade": o.suggested_trade, "thesis": o.thesis, "notes": o.notes,
             "pendingAnalysis": o.pending_analysis, "price": o.price, "realVolatility": o.real_volatility,
+            "realRegime": o.real_regime,
         }
         for o in opps
     ]
@@ -570,16 +595,16 @@ class OpportunityUpdate(BaseModel):
     price: Optional[float] = None
     volBias: Optional[str] = None
     realVolatility: Optional[dict] = None
+    realRegime: Optional[dict] = None
 
 
 @app.patch("/api/opportunities/{opp_id}")
 def update_opportunity(opp_id: str, update: OpportunityUpdate,
                         session: dict = Depends(require_auth), db: Session = Depends(get_db)):
-    """Persists status, notes, and — as of this checkpoint — real
-    price/volatility data pulled from Massive. Everything else an
-    opportunity shows (driver breakdowns, trade construction) is still
-    computed fresh client-side each load, not round-tripped through
-    here yet."""
+    """Persists status, notes, and real price/volatility/regime data
+    pulled from Massive. Everything else an opportunity shows (driver
+    breakdowns, trade construction) is still computed fresh client-side
+    each load, not round-tripped through here yet."""
     opp = db.query(models.Opportunity).filter(models.Opportunity.id == opp_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail=f"No opportunity with id {opp_id}")
@@ -593,6 +618,8 @@ def update_opportunity(opp_id: str, update: OpportunityUpdate,
         opp.vol_bias = update.volBias
     if update.realVolatility is not None:
         opp.real_volatility = update.realVolatility
+    if update.realRegime is not None:
+        opp.real_regime = update.realRegime
     db.commit()
     return {"updated": True, "id": opp_id, "status": opp.status, "notes": opp.notes}
 
