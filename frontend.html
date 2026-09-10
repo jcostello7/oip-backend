@@ -934,6 +934,29 @@ function ageOpportunityCatalyst(o) {
   o.lastUpdated = nowStamp();
 }
 
+// Pure mutation logic for applying real volatility data — extracted so
+// it's shared between the live "Get real volatility" button and the
+// startup merge (applying data that was persisted on a previous visit
+// needs to run through the exact same downstream recompute, not just
+// silently overwrite fields).
+function applyRealVolatility(o, real) {
+  o.price = real.price;
+  o.volBias = real.volBias;
+  o.realVolatility = {
+    historicalVolatilityPct: real.historicalVolatilityPct,
+    impliedVolatilityPct: real.impliedVolatilityPct,
+    spread: real.spread,
+    fetchedAt: real.fetchedAt || nowStamp()
+  };
+  if (!o.pendingAnalysis && o.status !== "Reject") {
+    o.tradeConstruction = constructTrade(o);
+    o.suggestedTrade = o.tradeConstruction.recommended.name;
+    o.tradeQuality = evaluateTradeQuality(o);
+    o.conviction = evaluateConviction(o);
+  }
+  o.lastUpdated = nowStamp();
+}
+
 // Pulls real price + real Volatility Bias (IV-vs-HV spread) from the
 // backend for one ticker. Deliberately per-ticker, not automatic —
 // the free Massive tier is 5 calls/min and this endpoint alone makes
@@ -957,26 +980,16 @@ async function fetchRealVolatility(o) {
       throw new Error(detail);
     }
     const result = await res.json();
+    applyRealVolatility(o, result);
 
-    o.price = result.price;
-    o.volBias = result.volBias;
-    o.realVolatility = {
-      historicalVolatilityPct: result.historicalVolatilityPct,
-      impliedVolatilityPct: result.impliedVolatilityPct,
-      spread: result.spread,
-      fetchedAt: nowStamp()
-    };
-
-    // Re-run everything downstream of volBias so the pipeline stays
-    // internally consistent — same pattern used by applyStatusChange
-    // and the simulate-mutation branch.
-    if (!o.pendingAnalysis && o.status !== "Reject") {
-      o.tradeConstruction = constructTrade(o);
-      o.suggestedTrade = o.tradeConstruction.recommended.name;
-      o.tradeQuality = evaluateTradeQuality(o);
-      o.conviction = evaluateConviction(o);
-    }
-    o.lastUpdated = nowStamp();
+    // Persist so this survives a reload. Fire-and-forget — local state
+    // is already updated, a sync failure just means this stays
+    // local-only until the next successful save.
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ price: o.price, volBias: o.volBias, realVolatility: o.realVolatility })
+    }).catch(err => console.warn("Real volatility fetched but failed to sync to backend:", err));
 
     renderQueue();
     renderWorkspace();
@@ -2358,6 +2371,19 @@ async function initFromBackend() {
         if (bo.notes) local.notes = bo.notes;
         if (bo.status && bo.status !== local.status) {
           applyStatusChange(local, bo.status); // reuses the real transition logic, not a raw overwrite
+        }
+        // Applied after status, so the downstream recompute inside
+        // applyRealVolatility runs against whatever status just landed,
+        // and ends up reflecting the real bias rather than the mock one.
+        if (bo.realVolatility) {
+          applyRealVolatility(local, {
+            price: bo.price,
+            volBias: bo.volBias,
+            historicalVolatilityPct: bo.realVolatility.historicalVolatilityPct,
+            impliedVolatilityPct: bo.realVolatility.impliedVolatilityPct,
+            spread: bo.realVolatility.spread,
+            fetchedAt: bo.realVolatility.fetchedAt
+          });
         }
       });
     }

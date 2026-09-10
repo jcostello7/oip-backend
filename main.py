@@ -520,6 +520,19 @@ def seed(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
     return {"seeded": True, "opportunities": len(SEED_OPPORTUNITIES), "journal_entries": len(SEED_JOURNAL_ENTRIES)}
 
 
+@app.post("/api/migrate-add-real-volatility")
+def migrate_add_real_volatility(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """One-time schema change — adds the real_volatility column to the
+    already-existing opportunities table. create_all() only creates
+    NEW tables; it never alters ones that already exist, so a genuine
+    schema change like this needs an explicit step until a real
+    migration tool (Alembic) is worth the overhead. Safe to call more
+    than once — IF NOT EXISTS makes it a no-op after the first run."""
+    db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_volatility JSON"))
+    db.commit()
+    return {"migrated": True}
+
+
 @app.get("/api/opportunities")
 def list_opportunities(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
     opps = db.query(models.Opportunity).all()
@@ -529,7 +542,7 @@ def list_opportunities(session: dict = Depends(require_auth), db: Session = Depe
             "opportunityScore": o.opportunity_score, "volatilityScore": o.volatility_score,
             "volBias": o.vol_bias, "ivRank": o.iv_rank, "directionalLean": o.directional_lean,
             "suggestedTrade": o.suggested_trade, "thesis": o.thesis, "notes": o.notes,
-            "pendingAnalysis": o.pending_analysis,
+            "pendingAnalysis": o.pending_analysis, "price": o.price, "realVolatility": o.real_volatility,
         }
         for o in opps
     ]
@@ -554,15 +567,19 @@ def list_journal(session: dict = Depends(require_auth), db: Session = Depends(ge
 class OpportunityUpdate(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
+    price: Optional[float] = None
+    volBias: Optional[str] = None
+    realVolatility: Optional[dict] = None
 
 
 @app.patch("/api/opportunities/{opp_id}")
 def update_opportunity(opp_id: str, update: OpportunityUpdate,
                         session: dict = Depends(require_auth), db: Session = Depends(get_db)):
-    """Persists the two things the frontend actually lets someone edit
-    right now — status and notes. Everything else an opportunity shows
-    (scores, driver breakdowns, trade construction) is still computed
-    fresh client-side each load, not round-tripped through here yet."""
+    """Persists status, notes, and — as of this checkpoint — real
+    price/volatility data pulled from Massive. Everything else an
+    opportunity shows (driver breakdowns, trade construction) is still
+    computed fresh client-side each load, not round-tripped through
+    here yet."""
     opp = db.query(models.Opportunity).filter(models.Opportunity.id == opp_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail=f"No opportunity with id {opp_id}")
@@ -570,6 +587,12 @@ def update_opportunity(opp_id: str, update: OpportunityUpdate,
         opp.status = update.status
     if update.notes is not None:
         opp.notes = update.notes
+    if update.price is not None:
+        opp.price = update.price
+    if update.volBias is not None:
+        opp.vol_bias = update.volBias
+    if update.realVolatility is not None:
+        opp.real_volatility = update.realVolatility
     db.commit()
     return {"updated": True, "id": opp_id, "status": opp.status, "notes": opp.notes}
 
