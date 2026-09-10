@@ -222,15 +222,13 @@ def real_regime_check(etf_ticker: str, session: dict = Depends(require_auth)):
 
 
 @app.get("/api/real-technicals-check/{ticker}")
-def real_technicals_check(ticker: str, session: dict = Depends(require_auth)):
-    """Real Relative Volume and Momentum from one real price-history
-    call — reuses the same aggregates endpoint already proven for HV
-    and Regime. RVOL = latest day's volume vs. the trailing average.
-    Momentum = 10-trading-day % price change, using absolute value —
-    a big move in either direction is equally 'worth a look' for
-    Opportunity Score, which measures attention-worthiness, not
-    direction; that's what Directional Lean and Volatility Bias are
-    for separately."""
+def real_technicals_check(ticker: str, sector_etf: Optional[str] = None, session: dict = Depends(require_auth)):
+    """Real Relative Volume, Momentum, Trend/Technical Structure, and
+    (if sector_etf is given) Sector Leadership — all from the same
+    real price-history endpoint already proven for HV and Regime.
+    Sector Leadership compares the stock's own 10-day return against
+    its sector proxy ETF's return over the same window — one extra
+    real call, only made when a sector ETF is actually provided."""
     end = date.today()
     start = end - timedelta(days=60)
     url = (f"https://api.massive.com/v2/aggs/ticker/{ticker.upper()}/range/1/day/"
@@ -268,6 +266,21 @@ def real_technicals_check(ticker: str, session: dict = Depends(require_auth)):
         ma_gap_pct = 0.0
         technical_score = 50
 
+    # Sector Leadership — only computed if a sector proxy ETF is given.
+    # Same 10-trading-day window as Momentum, so the comparison is
+    # apples-to-apples: is the stock beating its own sector, or lagging it.
+    sector_leadership_score = None
+    sector_return_pct = None
+    if sector_etf:
+        sector_url = (f"https://api.massive.com/v2/aggs/ticker/{sector_etf.upper()}/range/1/day/"
+                      f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+        sector_payload = _fetch_json(sector_url)
+        sector_results = sector_payload.get("results", [])
+        if len(sector_results) >= lookback + 1:
+            sector_closes = [bar["c"] for bar in sector_results]
+            sector_return_pct = round(((sector_closes[-1] - sector_closes[-1 - lookback]) / sector_closes[-1 - lookback]) * 100, 2)
+            sector_leadership_score = max(10, min(95, round(50 + (ten_day_return_pct - sector_return_pct) * 5)))
+
     return {
         "ticker": ticker.upper(),
         "latestVolume": latest_volume,
@@ -278,7 +291,10 @@ def real_technicals_check(ticker: str, session: dict = Depends(require_auth)):
         "priceChangePct": ten_day_return_pct,
         "momentumScore": momentum_score,
         "maGapPct": ma_gap_pct,
-        "technicalStructureScore": technical_score
+        "technicalStructureScore": technical_score,
+        "sectorEtf": sector_etf.upper() if sector_etf else None,
+        "sectorReturnPct": sector_return_pct,
+        "sectorLeadershipScore": sector_leadership_score
     }
 
 

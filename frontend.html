@@ -1111,6 +1111,12 @@ function applyRealTechnicals(o, real) {
     else o.oppDrivers.push(["Trend / technical structure", real.technicalStructureScore]);
   }
 
+  if (real.sectorLeadershipScore !== undefined && real.sectorLeadershipScore !== null) {
+    const leadIdx = o.oppDrivers.findIndex(([name]) => name === "Sector leadership");
+    if (leadIdx >= 0) o.oppDrivers[leadIdx] = ["Sector leadership", real.sectorLeadershipScore];
+    else o.oppDrivers.push(["Sector leadership", real.sectorLeadershipScore]);
+  }
+
   o.opportunityScore = computeOpportunityScore(o.oppDrivers);
 
   if (!o.pendingAnalysis && o.status !== "Reject" && o.volBias !== "Neutral") {
@@ -1132,7 +1138,11 @@ async function fetchRealTechnicals(o) {
   if (btn) btn.disabled = true;
 
   try {
-    const res = await fetch(`/api/real-technicals-check/${encodeURIComponent(o.id)}`);
+    const sectorTicker = SECTOR_PROXY[o.sector] || "";
+    const url = sectorTicker
+      ? `/api/real-technicals-check/${encodeURIComponent(o.id)}?sector_etf=${encodeURIComponent(sectorTicker)}`
+      : `/api/real-technicals-check/${encodeURIComponent(o.id)}`;
+    const res = await fetch(url);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       const detail = err.detail || `Request failed (HTTP ${res.status})`;
@@ -1145,7 +1155,8 @@ async function fetchRealTechnicals(o) {
     applyRealTechnicals(o, {
       relativeVolume: result.relativeVolume, relativeVolumeScore: result.relativeVolumeScore,
       priceChangePct: result.priceChangePct, momentumScore: result.momentumScore,
-      maGapPct: result.maGapPct, technicalStructureScore: result.technicalStructureScore
+      maGapPct: result.maGapPct, technicalStructureScore: result.technicalStructureScore,
+      sectorEtf: result.sectorEtf, sectorReturnPct: result.sectorReturnPct, sectorLeadershipScore: result.sectorLeadershipScore
     });
 
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
@@ -2262,7 +2273,7 @@ function renderWorkspace() {
       <div class="updated-tag" style="margin-top:6px;">Liquidity here is a coarse tradeability gate — Trade Quality Score (Phase 5) re-checks liquidity at the specific structure and strikes.</div>
       <button class="sim-btn" id="fetchRealTechnicalsBtn" style="margin-top:10px;">${o.realTechnicals ? 'Refresh real Relative Volume / Momentum' : 'Get real Relative Volume / Momentum'} <span class="driver-group-note">(1 call)</span></button>
       <div id="realTechnicalsStatus" class="updated-tag" style="margin-top:6px;"></div>
-      ${o.realTechnicals ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realTechnicals.fetchedAt} — real RVOL ${o.realTechnicals.relativeVolume}x, ${o.realTechnicals.priceChangePct >= 0 ? '+' : ''}${o.realTechnicals.priceChangePct}% over 10 trading days.</div>` : ''}
+      ${o.realTechnicals ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realTechnicals.fetchedAt} — real RVOL ${o.realTechnicals.relativeVolume}x, ${o.realTechnicals.priceChangePct >= 0 ? '+' : ''}${o.realTechnicals.priceChangePct}% over 10 trading days${o.realTechnicals.sectorEtf ? ` (vs. ${o.realTechnicals.sectorEtf} ${o.realTechnicals.sectorReturnPct >= 0 ? '+' : ''}${o.realTechnicals.sectorReturnPct}%)` : ''}.</div>` : ''}
       <div class="driver-group-label" style="margin-top:18px;">Volatility Opportunity Engine <span class="driver-group-note">(Section 7 weights)</span></div>
       <div class="drivers">${weightedDriverRows(o.volDrivers, VOL_WEIGHT_MAP, "volatility score")}</div>
     </section>
@@ -2577,6 +2588,9 @@ async function initFromBackend() {
             momentumScore: bo.realTechnicals.momentumScore,
             maGapPct: bo.realTechnicals.maGapPct,
             technicalStructureScore: bo.realTechnicals.technicalStructureScore,
+            sectorEtf: bo.realTechnicals.sectorEtf,
+            sectorReturnPct: bo.realTechnicals.sectorReturnPct,
+            sectorLeadershipScore: bo.realTechnicals.sectorLeadershipScore,
             fetchedAt: bo.realTechnicals.fetchedAt
           });
         }
