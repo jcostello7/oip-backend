@@ -475,18 +475,14 @@ def iv_check(ticker: str, session: dict = Depends(require_auth)):
 @app.get("/api/vol-bias-check/{ticker}")
 def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
     """The real version of the IV-vs-HV spread we settled on for
-    Volatility Bias — both halves pulled from real Massive data in one
-    call. High IV rich vs. HV -> Short Vol lean; cheap -> Long Vol."""
+    Volatility Bias — both halves pulled from real, free Massive data.
+    Uses the Black-Scholes-inverted IV (Options Basic, free), not the
+    snapshot endpoint (Starter, $29/mo)."""
     hv_result = hv_check(ticker, session)
-    iv_url = f"https://api.massive.com/v3/snapshot/options/{ticker.upper()}?contract_type=call&limit=250&apiKey={MASSIVE_API_KEY}"
-    iv_payload = _fetch_json(iv_url)
-    iv_results = iv_payload.get("results", [])
-    iv_match = find_atm_near_term_iv(iv_results, date.today()) if iv_results else None
-    if not iv_match:
-        raise HTTPException(status_code=502, detail=f"Could not compute IV for {ticker.upper()}")
+    iv_result = real_iv_check(ticker, session)
 
     hv_pct = hv_result["historicalVolatilityPct"]
-    iv_pct = iv_match["impliedVolatilityPct"]
+    iv_pct = iv_result["impliedVolatilityPct"]
     spread = round(iv_pct - hv_pct, 2)
     if spread > 3:
         bias = "Short Vol"
@@ -499,6 +495,8 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
         "ticker": ticker.upper(),
         "historicalVolatilityPct": hv_pct,
         "impliedVolatilityPct": iv_pct,
+        "ivContract": iv_result["contract"],
+        "ivMethod": iv_result["method"],
         "spread": spread,
         "volBias": bias
     }
