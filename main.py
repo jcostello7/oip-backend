@@ -254,6 +254,20 @@ def real_technicals_check(ticker: str, session: dict = Depends(require_auth)):
     rvol_score = max(10, min(95, round(50 + (rvol - 1) * 40)))
     momentum_score = max(10, min(95, round(50 + abs(ten_day_return_pct) * 3)))
 
+    # Trend/Technical Structure — same closes array, no extra API call.
+    # A clean trend (short MA well separated from long MA) reads as
+    # strong structure regardless of direction; a flat/choppy market
+    # reads as weak — same symmetric-magnitude approach as Momentum.
+    # Direction itself is Directional Lean's job elsewhere.
+    if len(closes) >= 30:
+        sma_short = sum(closes[-10:]) / 10
+        sma_long = sum(closes[-30:]) / 30
+        ma_gap_pct = round((sma_short - sma_long) / sma_long * 100, 2)
+        technical_score = max(15, min(95, round(50 + abs(ma_gap_pct) * 10)))
+    else:
+        ma_gap_pct = 0.0
+        technical_score = 50
+
     return {
         "ticker": ticker.upper(),
         "latestVolume": latest_volume,
@@ -262,7 +276,9 @@ def real_technicals_check(ticker: str, session: dict = Depends(require_auth)):
         "relativeVolumeScore": rvol_score,
         "lookbackDays": lookback,
         "priceChangePct": ten_day_return_pct,
-        "momentumScore": momentum_score
+        "momentumScore": momentum_score,
+        "maGapPct": ma_gap_pct,
+        "technicalStructureScore": technical_score
     }
 
 

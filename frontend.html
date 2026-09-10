@@ -1105,6 +1105,12 @@ function applyRealTechnicals(o, real) {
   if (momIdx >= 0) o.oppDrivers[momIdx] = ["Momentum", real.momentumScore];
   else o.oppDrivers.push(["Momentum", real.momentumScore]);
 
+  if (real.technicalStructureScore !== undefined) {
+    const techIdx = o.oppDrivers.findIndex(([name]) => name === "Trend / technical structure");
+    if (techIdx >= 0) o.oppDrivers[techIdx] = ["Trend / technical structure", real.technicalStructureScore];
+    else o.oppDrivers.push(["Trend / technical structure", real.technicalStructureScore]);
+  }
+
   o.opportunityScore = computeOpportunityScore(o.oppDrivers);
 
   if (!o.pendingAnalysis && o.status !== "Reject" && o.volBias !== "Neutral") {
@@ -1138,7 +1144,8 @@ async function fetchRealTechnicals(o) {
     const result = await res.json();
     applyRealTechnicals(o, {
       relativeVolume: result.relativeVolume, relativeVolumeScore: result.relativeVolumeScore,
-      priceChangePct: result.priceChangePct, momentumScore: result.momentumScore
+      priceChangePct: result.priceChangePct, momentumScore: result.momentumScore,
+      maGapPct: result.maGapPct, technicalStructureScore: result.technicalStructureScore
     });
 
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
@@ -2568,6 +2575,8 @@ async function initFromBackend() {
             relativeVolumeScore: bo.realTechnicals.relativeVolumeScore,
             priceChangePct: bo.realTechnicals.priceChangePct,
             momentumScore: bo.realTechnicals.momentumScore,
+            maGapPct: bo.realTechnicals.maGapPct,
+            technicalStructureScore: bo.realTechnicals.technicalStructureScore,
             fetchedAt: bo.realTechnicals.fetchedAt
           });
         }
