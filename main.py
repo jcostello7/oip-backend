@@ -298,6 +298,70 @@ def real_technicals_check(ticker: str, sector_etf: Optional[str] = None, session
     }
 
 
+@app.get("/api/real-scan")
+def real_scan(session: dict = Depends(require_auth)):
+    """Stage 1 of Real Scan — a cheap, whole-market screen. Pulls
+    Daily Market Summary for the two most recent trading days (2-6
+    calls total to find them, walking back over weekends/holidays —
+    NOT one call per ticker) and filters locally to a liquid,
+    actively-moving shortlist. This does NOT run the full scoring
+    engines — that's Stage 2, deliberately kept separate since it
+    costs real calls per ticker and can't be run on more than a
+    handful at once under the free-tier rate limit."""
+    trading_days = []
+    d = date.today()
+    attempts = 0
+    while len(trading_days) < 2 and attempts < 6:
+        url = f"https://api.massive.com/v2/aggs/grouped/locale/us/market/stocks/{d.isoformat()}?adjusted=true&apiKey={MASSIVE_API_KEY}"
+        try:
+            payload = _fetch_json(url)
+            results = payload.get("results", [])
+            if results:
+                trading_days.append((d.isoformat(), results))
+        except HTTPException:
+            pass
+        d -= timedelta(days=1)
+        attempts += 1
+
+    if len(trading_days) < 2:
+        raise HTTPException(status_code=502, detail="Could not find two recent trading days with data")
+
+    latest_date, latest_results = trading_days[0]
+    prior_date, prior_results = trading_days[1]
+    prior_by_ticker = {r["T"]: r for r in prior_results if "T" in r}
+    ticker_pattern = re.compile(r"^[A-Z]{1,5}$")
+
+    candidates = []
+    for r in latest_results:
+        ticker = r.get("T", "")
+        if not ticker_pattern.match(ticker):
+            continue
+        close = r.get("c")
+        volume = r.get("v")
+        if not close or not volume or close < 5:
+            continue
+        dollar_volume = close * volume
+        if dollar_volume < 20_000_000:
+            continue
+        prior = prior_by_ticker.get(ticker)
+        pct_change = round(((close - prior["c"]) / prior["c"]) * 100, 2) if prior and prior.get("c") else None
+        candidates.append({
+            "ticker": ticker, "close": close, "volume": volume,
+            "dollarVolume": round(dollar_volume), "pctChange": pct_change
+        })
+
+    candidates.sort(key=lambda c: c["dollarVolume"], reverse=True)
+    shortlist = candidates[:40]
+
+    return {
+        "scanDate": latest_date,
+        "comparisonDate": prior_date,
+        "totalTickersScanned": len(latest_results),
+        "passedLiquidityFilter": len(candidates),
+        "shortlist": shortlist
+    }
+
+
 @app.get("/api/market-check")
 def market_check(session: dict = Depends(require_auth)):
     """Proves the app can reach real market data — the first real test
