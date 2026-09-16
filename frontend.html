@@ -641,6 +641,7 @@
     </div>
   </div>
   <div style="display:flex; gap:8px;">
+    <button class="sim-btn" id="scanToggleBtn">Real Scan</button>
     <button class="sim-btn" id="edgeToggleBtn">Edge Analytics</button>
     <button class="sim-btn" id="journalToggleBtn">Journal (0)</button>
     <button class="sim-btn" id="simBtn">Simulate market update</button>
@@ -667,6 +668,7 @@
 
 <div class="workspace" id="journalView" style="display:none; max-width:800px; margin:0 auto;"></div>
 <div class="workspace" id="edgeView" style="display:none; max-width:800px; margin:0 auto;"></div>
+<div class="workspace" id="scanView" style="display:none; max-width:800px; margin:0 auto;"></div>
 
 <script>
 /*
@@ -1812,6 +1814,10 @@ let journalEntries = [
 let journalDraftByOpp = {};
 let journalViewOpen = false;
 let edgeViewOpen = false;
+let scanViewOpen = false;
+let scanResults = null;
+let deepDiveResults = {};
+let deepDiveStatus = "";
 
 function getJournalDraft(o) {
   if (!journalDraftByOpp[o.id]) {
@@ -2513,12 +2519,118 @@ function renderEdgeView() {
   `;
 }
 
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// Stage 1 — cheap, whole-market screen. One call to the backend, which
+// itself only costs a few real Massive calls (not one per ticker).
+async function runRealScan() {
+  deepDiveStatus = "Running scan…";
+  renderScanView();
+  try {
+    const res = await fetch("/api/real-scan");
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (HTTP ${res.status})`);
+    }
+    scanResults = await res.json();
+    deepDiveStatus = "";
+  } catch (err) {
+    deepDiveStatus = "Scan failed: " + err.message;
+  }
+  renderScanView();
+}
+
+// Stage 2 — deep-dives only the top movers, one ticker at a time, with
+// real pacing between them. Each ticker's consolidated real-data call
+// (~5 calls: 3 Stocks + 2 Options) fits inside one minute on its own;
+// firing the next ticker immediately after would stack on top of it
+// and hit the same rate wall — hence the ~70s wait between tickers.
+// This is genuinely slow (several minutes for 6 tickers) and that's
+// an honest tradeoff for staying on the free tier, not a bug.
+async function deepDiveTopMovers() {
+  if (!scanResults || !scanResults.shortlist) return;
+  const movers = [...scanResults.shortlist]
+    .filter(c => c.pctChange !== null && c.pctChange !== undefined)
+    .sort((a, b) => Math.abs(b.pctChange) - Math.abs(a.pctChange))
+    .slice(0, 6);
+
+  deepDiveResults = {};
+  for (let i = 0; i < movers.length; i++) {
+    const ticker = movers[i].ticker;
+    deepDiveStatus = `Deep-diving ${i + 1} of ${movers.length}: ${ticker}…`;
+    renderScanView();
+    try {
+      const res = await fetch(`/api/real-deep-dive/${encodeURIComponent(ticker)}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        deepDiveResults[ticker] = { error: err.detail || `HTTP ${res.status}` };
+      } else {
+        deepDiveResults[ticker] = await res.json();
+      }
+    } catch (err) {
+      deepDiveResults[ticker] = { error: err.message };
+    }
+    renderScanView();
+    if (i < movers.length - 1) {
+      deepDiveStatus = "Waiting ~70s before the next ticker (rate-limit pacing)…";
+      renderScanView();
+      await sleep(70000);
+    }
+  }
+  deepDiveStatus = "Deep-dive complete.";
+  renderScanView();
+}
+
+function renderScanView() {
+  const el = document.getElementById("scanView");
+  let html = `<div class="driver-group-label">Real Scan <span class="driver-group-note">(Section 4 — threshold-driven discovery, not a fixed list)</span></div>`;
+  html += `<button class="sim-btn" id="runScanBtn" style="margin-top:10px;">Run scan</button>`;
+  if (deepDiveStatus) html += `<div class="updated-tag" style="margin-top:8px;">${deepDiveStatus}</div>`;
+
+  if (scanResults) {
+    html += `<div class="updated-tag" style="margin-top:10px;">Scanned ${scanResults.totalTickersScanned} tickers (${scanResults.scanDate} vs ${scanResults.comparisonDate}) — ${scanResults.passedLiquidityFilter} passed the liquidity filter.${scanResults.etfFilteringApplied ? '' : ' ETF filtering not applied this run — warm the cache first for cleaner results.'}</div>`;
+    html += `<button class="sim-btn" id="deepDiveBtn" style="margin-top:10px;">Deep-dive top 6 movers <span class="driver-group-note">(~7 min, paced)</span></button>`;
+    html += `<div class="driver-group-label" style="margin-top:16px;">Shortlist <span class="driver-group-note">(top ${Math.min(15, scanResults.shortlist.length)} of ${scanResults.shortlist.length}, by dollar volume)</span></div>`;
+    html += `<div class="drivers">` + scanResults.shortlist.slice(0, 15).map(c => `
+      <div class="driver-row">
+        <span class="driver-name">${c.ticker}${c.isEtf ? ' <span class="driver-weight">ETF</span>' : ''}</span>
+        <div class="driver-track"><div class="driver-fill" style="width:${Math.min(100, Math.abs(c.pctChange || 0) * 10)}%"></div></div>
+        <span class="driver-val">${c.pctChange >= 0 ? '+' : ''}${c.pctChange}%</span>
+      </div>
+    `).join("") + `</div>`;
+  }
+
+  if (Object.keys(deepDiveResults).length) {
+    html += `<div class="driver-group-label" style="margin-top:20px;">Deep-dive results <span class="driver-group-note">(real data — not yet added to the Queue)</span></div>`;
+    Object.entries(deepDiveResults).forEach(([ticker, r]) => {
+      if (r.error) {
+        html += `<div class="trade-card" style="margin-bottom:10px;"><div class="tc-top"><span class="tc-name">${ticker}</span></div><div class="tc-why" style="color:var(--negative);">${r.error}</div></div>`;
+      } else {
+        html += `
+          <div class="trade-card" style="margin-bottom:10px;">
+            <div class="tc-top"><span class="tc-name">${ticker}</span><span class="tc-suitability">${r.volBias}</span></div>
+            <div class="tc-row"><span class="tc-label">Price / IV vs HV</span><div class="tc-why">$${r.price} — IV ${r.impliedVolatilityPct ?? '—'}% vs HV ${r.historicalVolatilityPct}%</div></div>
+            <div class="tc-row"><span class="tc-label">RVOL / Momentum / Trend</span><div class="tc-why">${r.relativeVolume}x · ${r.priceChangePct >= 0 ? '+' : ''}${r.priceChangePct}% (10d) · structure ${r.technicalStructureScore}</div></div>
+          </div>`;
+      }
+    });
+  }
+
+  el.innerHTML = html;
+
+  const runBtn = document.getElementById("runScanBtn");
+  if (runBtn) runBtn.addEventListener("click", runRealScan);
+  const deepBtn = document.getElementById("deepDiveBtn");
+  if (deepBtn) deepBtn.addEventListener("click", deepDiveTopMovers);
+}
+
 document.getElementById("journalToggleBtn").addEventListener("click", () => {
   journalViewOpen = !journalViewOpen;
-  if (journalViewOpen) edgeViewOpen = false;
-  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen) ? "none" : "flex";
+  if (journalViewOpen) { edgeViewOpen = false; scanViewOpen = false; }
+  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen || scanViewOpen) ? "none" : "flex";
   document.getElementById("journalView").style.display = journalViewOpen ? "block" : "none";
   document.getElementById("edgeView").style.display = edgeViewOpen ? "block" : "none";
+  document.getElementById("scanView").style.display = scanViewOpen ? "block" : "none";
   if (journalViewOpen) renderJournalView();
   updateJournalToggleLabel();
   updateEdgeToggleLabel();
@@ -2526,11 +2638,24 @@ document.getElementById("journalToggleBtn").addEventListener("click", () => {
 
 document.getElementById("edgeToggleBtn").addEventListener("click", () => {
   edgeViewOpen = !edgeViewOpen;
-  if (edgeViewOpen) journalViewOpen = false;
-  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen) ? "none" : "flex";
+  if (edgeViewOpen) { journalViewOpen = false; scanViewOpen = false; }
+  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen || scanViewOpen) ? "none" : "flex";
   document.getElementById("journalView").style.display = journalViewOpen ? "block" : "none";
   document.getElementById("edgeView").style.display = edgeViewOpen ? "block" : "none";
+  document.getElementById("scanView").style.display = scanViewOpen ? "block" : "none";
   if (edgeViewOpen) renderEdgeView();
+  updateJournalToggleLabel();
+  updateEdgeToggleLabel();
+});
+
+document.getElementById("scanToggleBtn").addEventListener("click", () => {
+  scanViewOpen = !scanViewOpen;
+  if (scanViewOpen) { journalViewOpen = false; edgeViewOpen = false; }
+  document.getElementById("mainLayout").style.display = (journalViewOpen || edgeViewOpen || scanViewOpen) ? "none" : "flex";
+  document.getElementById("journalView").style.display = journalViewOpen ? "block" : "none";
+  document.getElementById("edgeView").style.display = edgeViewOpen ? "block" : "none";
+  document.getElementById("scanView").style.display = scanViewOpen ? "block" : "none";
+  if (scanViewOpen) renderScanView();
   updateJournalToggleLabel();
   updateEdgeToggleLabel();
 });

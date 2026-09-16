@@ -345,6 +345,146 @@ def warm_etf_cache_endpoint(session: dict = Depends(require_auth)):
     return {"warmed": True, "etfCount": len(tickers)}
 
 
+@app.get("/api/real-deep-dive/{ticker}")
+def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict = Depends(require_auth)):
+    """Everything the separate real-data buttons compute, in one
+    efficient pass. hv_check and real_technicals_check were each
+    independently fetching the same ~60 days of price history for a
+    ticker — this fetches it once and reuses it for HV, RVOL,
+    Momentum, and Trend. Also drops the redundant underlying-price
+    lookup real_iv_check used to make on its own, reusing this same
+    fetch's latest close instead. Net result: 5 real calls total (3
+    Stocks, 2 Options) instead of 8 — fits inside one minute on both
+    rate buckets, which is what makes Stage 2's per-ticker sequencing
+    workable without a paid tier. Response is shaped to drop directly
+    into the existing applyRealVolatility / applyRealTechnicals /
+    applyRealRegime functions client-side — no new frontend mutation
+    logic needed, just new plumbing to call them."""
+    ticker = ticker.upper()
+    end = date.today()
+    start = end - timedelta(days=60)
+    url = (f"https://api.massive.com/v2/aggs/ticker/{ticker}/range/1/day/"
+           f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+    payload = _fetch_json(url)
+    results = payload.get("results", [])
+    if len(results) < 15:
+        raise HTTPException(status_code=502, detail=f"Not enough price history for {ticker}")
+
+    volumes = [bar["v"] for bar in results]
+    closes = [bar["c"] for bar in results]
+    price = closes[-1]
+
+    # HV — same formula as hv_check
+    log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    n = len(log_returns)
+    mean_return = sum(log_returns) / n
+    variance = sum((r - mean_return) ** 2 for r in log_returns) / (n - 1)
+    hv_pct = round(math.sqrt(variance) * math.sqrt(252) * 100, 2)
+
+    # RVOL, Momentum, Trend — same formulas as real_technicals_check
+    latest_volume = volumes[-1]
+    baseline_volumes = volumes[:-1][-20:]
+    avg_volume = sum(baseline_volumes) / len(baseline_volumes)
+    rvol = latest_volume / avg_volume if avg_volume > 0 else 1.0
+    rvol_score = max(10, min(95, round(50 + (rvol - 1) * 40)))
+
+    lookback = min(10, len(closes) - 1)
+    ten_day_return_pct = round(((closes[-1] - closes[-1 - lookback]) / closes[-1 - lookback]) * 100, 2)
+    momentum_score = max(10, min(95, round(50 + abs(ten_day_return_pct) * 3)))
+
+    if len(closes) >= 30:
+        sma_short = sum(closes[-10:]) / 10
+        sma_long = sum(closes[-30:]) / 30
+        ma_gap_pct = round((sma_short - sma_long) / sma_long * 100, 2)
+        technical_score = max(15, min(95, round(50 + abs(ma_gap_pct) * 10)))
+    else:
+        ma_gap_pct = 0.0
+        technical_score = 50
+
+    # IV via Black-Scholes inversion — same as real_iv_check, but reuses
+    # `price` above instead of a separate redundant prev-close call
+    ref_url = (f"https://api.massive.com/v3/reference/options/contracts"
+               f"?underlying_ticker={ticker}&contract_type=call&limit=1000&apiKey={MASSIVE_API_KEY}")
+    ref_payload = _fetch_json(ref_url)
+    contracts = ref_payload.get("results", [])
+    iv_pct = None
+    option_contract = None
+    today = date.today()
+    candidates = []
+    for c in contracts:
+        parsed = parse_occ_ticker(c["ticker"])
+        if not parsed:
+            continue
+        exp_date = date.fromisoformat(parsed["expiration_date"])
+        if 15 <= (exp_date - today).days <= 60:
+            candidates.append((exp_date, parsed, c["ticker"]))
+    if candidates:
+        nearest_exp = min(c[0] for c in candidates)
+        same_exp = [c for c in candidates if c[0] == nearest_exp]
+        exp_date, parsed, contract_ticker = min(same_exp, key=lambda c: abs(c[1]["strike"] - price))
+        opt_payload = _fetch_json(f"https://api.massive.com/v2/aggs/ticker/{contract_ticker}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}")
+        opt_results = opt_payload.get("results", [])
+        if opt_results:
+            option_price = opt_results[0]["c"]
+            T = (exp_date - today).days / 365.0
+            iv_pct = round(implied_vol_bisection(option_price, price, parsed["strike"], T, RISK_FREE_RATE) * 100, 2)
+            option_contract = contract_ticker
+
+    spread = round(iv_pct - hv_pct, 2) if iv_pct is not None else None
+    if spread is None:
+        vol_bias = "Unknown"
+    elif spread > 3:
+        vol_bias = "Short Vol"
+    elif spread < -3:
+        vol_bias = "Long Vol"
+    else:
+        vol_bias = "Neutral"
+
+    # Regime — sector proxy is optional (caller may not know the
+    # ticker's sector yet); market proxy (SPY) always runs
+    sector_return_pct = None
+    sector_leadership_score = None
+    if sector_etf:
+        sector_payload = _fetch_json(
+            f"https://api.massive.com/v2/aggs/ticker/{sector_etf.upper()}/range/1/day/"
+            f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+        sector_results = sector_payload.get("results", [])
+        if len(sector_results) >= lookback + 1:
+            sector_closes = [bar["c"] for bar in sector_results]
+            sector_return_pct = round(((sector_closes[-1] - sector_closes[-1 - lookback]) / sector_closes[-1 - lookback]) * 100, 2)
+            sector_leadership_score = max(10, min(95, round(50 + (ten_day_return_pct - sector_return_pct) * 5)))
+
+    market_payload = _fetch_json(
+        f"https://api.massive.com/v2/aggs/ticker/SPY/range/1/day/"
+        f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+    market_results = market_payload.get("results", [])
+    market_return_pct = None
+    if len(market_results) >= 6:
+        market_closes = [bar["c"] for bar in market_results]
+        market_return_pct = round(((market_closes[-1] - market_closes[-6]) / market_closes[-6]) * 100, 2)
+
+    return {
+        "ticker": ticker,
+        "price": price,
+        "historicalVolatilityPct": hv_pct,
+        "impliedVolatilityPct": iv_pct,
+        "spread": spread,
+        "volBias": vol_bias,
+        "ivContract": option_contract,
+        "relativeVolume": round(rvol, 2),
+        "relativeVolumeScore": rvol_score,
+        "priceChangePct": ten_day_return_pct,
+        "momentumScore": momentum_score,
+        "maGapPct": ma_gap_pct,
+        "technicalStructureScore": technical_score,
+        "sectorEtf": sector_etf.upper() if sector_etf else None,
+        "sectorReturnPct": sector_return_pct,
+        "sectorLeadershipScore": sector_leadership_score,
+        "marketTicker": "SPY",
+        "marketReturnPct": market_return_pct
+    }
+
+
 @app.get("/api/real-scan")
 def real_scan(session: dict = Depends(require_auth)):
     """Stage 1 of Real Scan — a cheap, whole-market screen. Pulls
