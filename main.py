@@ -31,7 +31,7 @@ import urllib.error
 import json
 import math
 import re
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 from fastapi import FastAPI, Request, HTTPException, Form, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -298,6 +298,40 @@ def real_technicals_check(ticker: str, sector_etf: Optional[str] = None, session
     }
 
 
+BROAD_INDEX_ETFS = {"SPY", "VOO", "IVV", "QQQ", "DIA", "IWM", "VTI", "VT", "VXUS", "MDY"}
+
+_etf_ticker_cache = {"tickers": None, "fetched_at": None}
+
+
+def get_etf_ticker_set():
+    """Cached set of all active US ETF tickers, so Real Scan can tell
+    individual stocks from funds without a per-ticker lookup. Ticker
+    classification doesn't change intraday, so this is refreshed at
+    most once a day — otherwise every single scan would cost 3-4 extra
+    calls just to re-learn something that hasn't changed."""
+    now = datetime.utcnow()
+    cached = _etf_ticker_cache["tickers"]
+    fetched_at = _etf_ticker_cache["fetched_at"]
+    if cached is not None and fetched_at and (now - fetched_at).total_seconds() < 86400:
+        return cached
+
+    etf_tickers = set()
+    url = f"https://api.massive.com/v3/reference/tickers?type=ETF&market=stocks&active=true&limit=1000&apiKey={MASSIVE_API_KEY}"
+    pages = 0
+    while url and pages < 6:
+        payload = _fetch_json(url)
+        for r in payload.get("results", []):
+            if r.get("ticker"):
+                etf_tickers.add(r["ticker"])
+        next_url = payload.get("next_url")
+        url = f"{next_url}&apiKey={MASSIVE_API_KEY}" if next_url else None
+        pages += 1
+
+    _etf_ticker_cache["tickers"] = etf_tickers
+    _etf_ticker_cache["fetched_at"] = now
+    return etf_tickers
+
+
 @app.get("/api/real-scan")
 def real_scan(session: dict = Depends(require_auth)):
     """Stage 1 of Real Scan — a cheap, whole-market screen. Pulls
@@ -330,12 +364,15 @@ def real_scan(session: dict = Depends(require_auth)):
     prior_date, prior_results = trading_days[1]
     prior_by_ticker = {r["T"]: r for r in prior_results if "T" in r}
     ticker_pattern = re.compile(r"^[A-Z]{1,5}$")
+    etf_set = get_etf_ticker_set()
 
     candidates = []
     for r in latest_results:
         ticker = r.get("T", "")
         if not ticker_pattern.match(ticker):
             continue
+        if ticker in etf_set and ticker not in BROAD_INDEX_ETFS:
+            continue  # exclude sector/leveraged/bond/commodity ETFs, keep individual stocks and broad market index funds
         close = r.get("c")
         volume = r.get("v")
         if not close or not volume or close < 5:
@@ -347,7 +384,8 @@ def real_scan(session: dict = Depends(require_auth)):
         pct_change = round(((close - prior["c"]) / prior["c"]) * 100, 2) if prior and prior.get("c") else None
         candidates.append({
             "ticker": ticker, "close": close, "volume": volume,
-            "dollarVolume": round(dollar_volume), "pctChange": pct_change
+            "dollarVolume": round(dollar_volume), "pctChange": pct_change,
+            "isEtf": ticker in etf_set
         })
 
     candidates.sort(key=lambda c: c["dollarVolume"], reverse=True)
