@@ -303,18 +303,24 @@ BROAD_INDEX_ETFS = {"SPY", "VOO", "IVV", "QQQ", "DIA", "IWM", "VTI", "VT", "VXUS
 _etf_ticker_cache = {"tickers": None, "fetched_at": None}
 
 
-def get_etf_ticker_set():
-    """Cached set of all active US ETF tickers, so Real Scan can tell
-    individual stocks from funds without a per-ticker lookup. Ticker
-    classification doesn't change intraday, so this is refreshed at
-    most once a day — otherwise every single scan would cost 3-4 extra
-    calls just to re-learn something that hasn't changed."""
+def get_etf_ticker_set_if_cached():
+    """Returns the cached ETF set if warm, or None if it needs
+    warming. Deliberately never triggers a fetch itself — that's a
+    separate action (see warm_etf_cache) — so real_scan's own call
+    budget stays predictable and can't combine with a cold-cache
+    fetch to blow through the 5-calls/minute limit in one request."""
     now = datetime.utcnow()
     cached = _etf_ticker_cache["tickers"]
     fetched_at = _etf_ticker_cache["fetched_at"]
     if cached is not None and fetched_at and (now - fetched_at).total_seconds() < 86400:
         return cached
+    return None
 
+
+def warm_etf_cache():
+    """Actually fetches and caches the ETF reference set — 3-4 real
+    calls. Called explicitly via /api/warm-etf-cache, kept separate
+    from real_scan on purpose (see above)."""
     etf_tickers = set()
     url = f"https://api.massive.com/v3/reference/tickers?type=ETF&market=stocks&active=true&limit=1000&apiKey={MASSIVE_API_KEY}"
     pages = 0
@@ -326,10 +332,17 @@ def get_etf_ticker_set():
         next_url = payload.get("next_url")
         url = f"{next_url}&apiKey={MASSIVE_API_KEY}" if next_url else None
         pages += 1
-
     _etf_ticker_cache["tickers"] = etf_tickers
-    _etf_ticker_cache["fetched_at"] = now
+    _etf_ticker_cache["fetched_at"] = datetime.utcnow()
     return etf_tickers
+
+
+@app.post("/api/warm-etf-cache")
+def warm_etf_cache_endpoint(session: dict = Depends(require_auth)):
+    """Call this once (or once a day) before running a scan. Separate
+    from /api/real-scan on purpose — see warm_etf_cache's docstring."""
+    tickers = warm_etf_cache()
+    return {"warmed": True, "etfCount": len(tickers)}
 
 
 @app.get("/api/real-scan")
@@ -364,14 +377,17 @@ def real_scan(session: dict = Depends(require_auth)):
     prior_date, prior_results = trading_days[1]
     prior_by_ticker = {r["T"]: r for r in prior_results if "T" in r}
     ticker_pattern = re.compile(r"^[A-Z]{1,5}$")
-    etf_set = get_etf_ticker_set()
+    etf_set = get_etf_ticker_set_if_cached()
+    etf_filtering_applied = etf_set is not None
+    if etf_set is None:
+        etf_set = set()  # no filtering this run — every ticker treated as "not an ETF"
 
     candidates = []
     for r in latest_results:
         ticker = r.get("T", "")
         if not ticker_pattern.match(ticker):
             continue
-        if ticker in etf_set and ticker not in BROAD_INDEX_ETFS:
+        if etf_filtering_applied and ticker in etf_set and ticker not in BROAD_INDEX_ETFS:
             continue  # exclude sector/leveraged/bond/commodity ETFs, keep individual stocks and broad market index funds
         close = r.get("c")
         volume = r.get("v")
@@ -396,6 +412,8 @@ def real_scan(session: dict = Depends(require_auth)):
         "comparisonDate": prior_date,
         "totalTickersScanned": len(latest_results),
         "passedLiquidityFilter": len(candidates),
+        "etfFilteringApplied": etf_filtering_applied,
+        "note": None if etf_filtering_applied else "ETF cache not warm yet — sector/leveraged/bond ETFs weren't filtered this run. Call POST /api/warm-etf-cache, then re-run.",
         "shortlist": shortlist
     }
 
