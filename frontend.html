@@ -2581,6 +2581,145 @@ async function deepDiveTopMovers() {
   renderScanView();
 }
 
+// Builds a full opportunity object from a deep-dive result — reuses
+// the existing engines (computeOpportunityScore, computeVolatilityScore)
+// and the existing tested apply* functions, rather than new narrative
+// logic. Enters as New + pendingAnalysis, same as any freshly-injected
+// mock opportunity, so moving it to Analyzed triggers the same
+// already-tested placeholder-text-and-trade-construction flow.
+// Two fields have no real source yet and are honest placeholders,
+// same limitation flagged everywhere else in this build: Catalyst
+// strength (no earnings-calendar data source) and driver-level
+// Liquidity (already passed the dollar-volume filter, so a moderate
+// default is defensible, not a precise measure).
+function createOpportunityFromScan(ticker, deepDive) {
+  const sector = deepDive.detectedSector || "Diversified";
+  const oppDrivers = [
+    ["Catalyst strength", 50],
+    ["Trend / technical structure", deepDive.technicalStructureScore],
+    ["Relative volume", deepDive.relativeVolumeScore],
+    ["Momentum", deepDive.momentumScore],
+    ["Sector leadership", deepDive.sectorLeadershipScore ?? 50],
+    ["Liquidity", 60],
+    ["Market regime alignment", 50]
+  ];
+  const volDrivers = makeDrivers(VOL_DRIVER_NAMES, 40, 60);
+  // Direction inferred from real 10-day momentum — a real signal,
+  // not a random pick, though a coarser one than the mock DIRECTIONAL_LEAN
+  // map used for the original ten.
+  const directionalLean = deepDive.priceChangePct > 2 ? "Bullish" : deepDive.priceChangePct < -2 ? "Bearish" : "Neutral";
+
+  const o = {
+    id: ticker, sector, status: "New",
+    dateAdded: nowStamp(), lastUpdated: nowStamp(), pendingAnalysis: true,
+    oppDrivers, volDrivers, directionalLean,
+    price: deepDive.price, historicalMovePct: 5, impliedMovePct: 5, daysToCatalyst: 20,
+    tradeConstruction: null, tradeQuality: null, conviction: null,
+    suggestedTrade: "Pending trade construction",
+    thesis: "", thinking: "", riskFactors: "", notes: "",
+    ivRank: deepDive.impliedVolatilityPct != null ? Math.round(deepDive.impliedVolatilityPct) : 50
+  };
+
+  if (deepDive.sectorReturnPct !== null && deepDive.sectorReturnPct !== undefined) {
+    applyRealRegime(o, {
+      sectorTicker: deepDive.sectorEtf, sectorChangePct: deepDive.sectorReturnPct,
+      marketTicker: deepDive.marketTicker, marketChangePct: deepDive.marketReturnPct
+    });
+  } else {
+    o.regime = getRegimeContext(o.sector);
+  }
+
+  o.volatilityScore = computeVolatilityScore(o.volDrivers);
+  o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+
+  applyRealVolatility(o, {
+    price: deepDive.price, volBias: deepDive.volBias,
+    historicalVolatilityPct: deepDive.historicalVolatilityPct, impliedVolatilityPct: deepDive.impliedVolatilityPct,
+    spread: deepDive.spread, fetchedAt: nowStamp()
+  });
+  applyRealTechnicals(o, {
+    relativeVolume: deepDive.relativeVolume, relativeVolumeScore: deepDive.relativeVolumeScore,
+    priceChangePct: deepDive.priceChangePct, momentumScore: deepDive.momentumScore,
+    maGapPct: deepDive.maGapPct, technicalStructureScore: deepDive.technicalStructureScore,
+    sectorEtf: deepDive.sectorEtf, sectorReturnPct: deepDive.sectorReturnPct, sectorLeadershipScore: deepDive.sectorLeadershipScore
+  });
+
+  return o;
+}
+
+async function addScanResultToQueue(ticker) {
+  const result = deepDiveResults[ticker];
+  if (!result || result.error) return;
+  if (data.find(o => o.id === ticker)) return; // already in the Queue
+
+  const o = createOpportunityFromScan(ticker, result);
+  data.push(o);
+
+  fetch("/api/opportunities", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      id: o.id, sector: o.sector, status: o.status,
+      opportunityScore: o.opportunityScore, volatilityScore: o.volatilityScore,
+      volBias: o.volBias, ivRank: o.ivRank, directionalLean: o.directionalLean,
+      suggestedTrade: o.suggestedTrade, thesis: o.thesis, notes: o.notes,
+      pendingAnalysis: o.pendingAnalysis, price: o.price,
+      realVolatility: o.realVolatility, realRegime: o.realRegime, realTechnicals: o.realTechnicals
+    })
+  }).catch(err => console.warn("Added to Queue locally but failed to sync to backend:", err));
+
+  selectedId = o.id;
+  scanViewOpen = false;
+  document.getElementById("mainLayout").style.display = "flex";
+  document.getElementById("scanView").style.display = "none";
+  renderChips();
+  renderQueue();
+  renderWorkspace();
+}
+
+// Reload-persistence fix: previously, a backend opportunity with no
+// local match was silently skipped during the startup merge — meaning
+// a scan-discovered opportunity would vanish on reload. This builds a
+// full local object from the backend's stored fields instead. Driver-
+// level detail resets to generic placeholders (same limitation as
+// every opportunity today — only core fields and real-data fields
+// persist, not full engine output), but status, notes, and all real
+// data correctly restore.
+function hydrateOpportunityFromBackend(bo) {
+  const oppDrivers = makeDrivers(OPP_DRIVER_NAMES, 40, 70);
+  const volDrivers = makeDrivers(VOL_DRIVER_NAMES, 40, 60);
+  const o = {
+    id: bo.id, sector: bo.sector || "Diversified", status: bo.status || "New",
+    dateAdded: nowStamp(), lastUpdated: nowStamp(), pendingAnalysis: !!bo.pendingAnalysis,
+    oppDrivers, volDrivers, directionalLean: bo.directionalLean || "Neutral",
+    price: bo.price, historicalMovePct: 5, impliedMovePct: 5, daysToCatalyst: 20,
+    tradeConstruction: null, tradeQuality: null, conviction: null,
+    suggestedTrade: bo.suggestedTrade || "Pending trade construction",
+    thesis: bo.thesis || "", thinking: "", riskFactors: "", notes: bo.notes || "",
+    ivRank: 50, regime: getRegimeContext(bo.sector || "Diversified")
+  };
+  o.volatilityScore = computeVolatilityScore(o.volDrivers);
+  o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+
+  if (bo.realVolatility) {
+    applyRealVolatility(o, { price: bo.price, volBias: bo.volBias, ...bo.realVolatility });
+  }
+  if (bo.realRegime) {
+    applyRealRegime(o, {
+      sectorTicker: bo.realRegime.sectorTicker, sectorChangePct: bo.realRegime.sectorChangePct,
+      marketTicker: bo.realRegime.marketTicker, marketChangePct: bo.realRegime.marketChangePct
+    });
+  }
+  if (bo.realTechnicals) applyRealTechnicals(o, bo.realTechnicals);
+
+  if (!o.pendingAnalysis && !o.thesis) {
+    o.thesis = "Analysis complete — see the driver breakdown below for the basis of this score.";
+    o.thinking = "Full narrative pending manual write-up; scores and drivers reflect the threshold scan that flagged this.";
+    o.riskFactors = "Not yet assessed in detail — treat drivers as directional only until reviewed.";
+  }
+  return o;
+}
+
 function renderScanView() {
   const el = document.getElementById("scanView");
   let html = `<div class="driver-group-label">Real Scan <span class="driver-group-note">(Section 4 — threshold-driven discovery, not a fixed list)</span></div>`;
@@ -2601,16 +2740,21 @@ function renderScanView() {
   }
 
   if (Object.keys(deepDiveResults).length) {
-    html += `<div class="driver-group-label" style="margin-top:20px;">Deep-dive results <span class="driver-group-note">(real data — not yet added to the Queue)</span></div>`;
+    html += `<div class="driver-group-label" style="margin-top:20px;">Deep-dive results <span class="driver-group-note">(real data)</span></div>`;
     Object.entries(deepDiveResults).forEach(([ticker, r]) => {
       if (r.error) {
         html += `<div class="trade-card" style="margin-bottom:10px;"><div class="tc-top"><span class="tc-name">${ticker}</span></div><div class="tc-why" style="color:var(--negative);">${r.error}</div></div>`;
       } else {
+        const alreadyInQueue = data.find(o => o.id === ticker);
         html += `
           <div class="trade-card" style="margin-bottom:10px;">
             <div class="tc-top"><span class="tc-name">${ticker}</span><span class="tc-suitability">${r.volBias}</span></div>
             <div class="tc-row"><span class="tc-label">Price / IV vs HV</span><div class="tc-why">$${r.price} — IV ${r.impliedVolatilityPct ?? '—'}% vs HV ${r.historicalVolatilityPct}%</div></div>
             <div class="tc-row"><span class="tc-label">RVOL / Momentum / Trend</span><div class="tc-why">${r.relativeVolume}x · ${r.priceChangePct >= 0 ? '+' : ''}${r.priceChangePct}% (10d) · structure ${r.technicalStructureScore}</div></div>
+            <div class="tc-row"><span class="tc-label">Detected sector</span><div class="tc-why">${r.detectedSector || 'Not matched — using broad market proxy'}</div></div>
+            ${alreadyInQueue
+              ? `<div class="updated-tag" style="margin-top:6px;">Already in the Queue</div>`
+              : `<button class="sim-btn" data-add-ticker="${ticker}" style="margin-top:8px;">Add to Queue</button>`}
           </div>`;
       }
     });
@@ -2622,6 +2766,9 @@ function renderScanView() {
   if (runBtn) runBtn.addEventListener("click", runRealScan);
   const deepBtn = document.getElementById("deepDiveBtn");
   if (deepBtn) deepBtn.addEventListener("click", deepDiveTopMovers);
+  el.querySelectorAll("[data-add-ticker]").forEach(btn => {
+    btn.addEventListener("click", () => addScanResultToQueue(btn.dataset.addTicker));
+  });
 }
 
 document.getElementById("journalToggleBtn").addEventListener("click", () => {
@@ -2676,7 +2823,15 @@ async function initFromBackend() {
       const backendOpps = await oppsRes.json();
       backendOpps.forEach(bo => {
         const local = data.find(o => o.id === bo.id);
-        if (!local) return; // backend has a ticker this session's local seed doesn't know about
+        if (!local) {
+          // A scan-discovered opportunity the backend already knows
+          // about but this session's local seed doesn't — build it
+          // fresh from the backend's stored fields instead of
+          // silently dropping it (that used to be a real persistence
+          // gap: a newly-created opportunity would vanish on reload).
+          data.push(hydrateOpportunityFromBackend(bo));
+          return;
+        }
         if (bo.notes) local.notes = bo.notes;
         if (bo.status && bo.status !== local.status) {
           applyStatusChange(local, bo.status); // reuses the real transition logic, not a raw overwrite

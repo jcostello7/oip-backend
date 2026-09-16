@@ -300,6 +300,54 @@ def real_technicals_check(ticker: str, sector_etf: Optional[str] = None, session
 
 BROAD_INDEX_ETFS = {"SPY", "VOO", "IVV", "QQQ", "DIA", "IWM", "VTI", "VT", "VXUS", "MDY"}
 
+# Mirrors the frontend's SECTOR_PROXY mapping — needed server-side too,
+# since real_deep_dive has to know which ETF to fetch for Regime when
+# the caller doesn't already know the ticker's sector (a brand-new
+# scan-discovered ticker, not one of the original ten).
+SECTOR_PROXY = {
+    "Technology": "XLK", "Semiconductors": "SMH", "Financials": "XLF",
+    "Financial Technology": "XLF", "Energy": "XLE", "Energy Services": "XLE",
+    "Healthcare": "XLV", "Consumer Staples": "XLP", "Consumer Discretionary": "XLY",
+    "Consumer / Auto": "XLY", "Media & Entertainment": "XLC", "Industrials": "XLI"
+}
+
+# Keyword match against Massive's SIC description — simpler and more
+# robust than memorizing exact SIC code ranges. Falls through to None
+# (which the caller treats as "use the broad market proxy") for
+# anything genuinely ambiguous, rather than guessing wrong.
+SIC_KEYWORD_TO_SECTOR = [
+    ("semiconductor", "Semiconductors"),
+    ("computer", "Technology"), ("software", "Technology"), ("internet", "Technology"), ("electronic", "Technology"),
+    ("bank", "Financials"), ("insurance", "Financials"), ("credit", "Financials"), ("invest", "Financials"), ("financ", "Financials"),
+    ("petroleum", "Energy"), ("oil", "Energy"),
+    ("drilling", "Energy Services"), ("oilfield", "Energy Services"),
+    ("pharmaceutical", "Healthcare"), ("biological", "Healthcare"), ("health", "Healthcare"), ("medical", "Healthcare"), ("hospital", "Healthcare"),
+    ("grocery", "Consumer Staples"), ("food", "Consumer Staples"), ("beverage", "Consumer Staples"),
+    ("retail", "Consumer Discretionary"), ("apparel", "Consumer Discretionary"), ("department store", "Consumer Discretionary"),
+    ("motor vehicle", "Consumer / Auto"), ("automotive", "Consumer / Auto"),
+    ("motion picture", "Media & Entertainment"), ("broadcasting", "Media & Entertainment"), ("entertainment", "Media & Entertainment"),
+    ("machinery", "Industrials"), ("industrial", "Industrials"), ("aerospace", "Industrials"), ("construction", "Industrials"),
+]
+
+
+def get_sector_for_ticker(ticker):
+    """Maps a ticker to one of our known sector buckets via Massive's
+    SIC industry classification. Returns None (not a guess) when
+    nothing matches — the caller falls back to the broad market proxy
+    rather than misclassifying something ambiguous."""
+    try:
+        payload = _fetch_json(f"https://api.massive.com/v3/reference/tickers/{ticker.upper()}?apiKey={MASSIVE_API_KEY}")
+    except HTTPException:
+        return None
+    raw_results = payload.get("results")
+    result = raw_results[0] if isinstance(raw_results, list) and raw_results else (raw_results if isinstance(raw_results, dict) else {})
+    sic_desc = (result.get("sic_description") or "").lower()
+    for keyword, sector in SIC_KEYWORD_TO_SECTOR:
+        if keyword in sic_desc:
+            return sector
+    return None
+
+
 _etf_ticker_cache = {"tickers": None, "fetched_at": None}
 
 
@@ -440,8 +488,15 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     else:
         vol_bias = "Neutral"
 
-    # Regime — sector proxy is optional (caller may not know the
-    # ticker's sector yet); market proxy (SPY) always runs
+    # Regime — sector proxy is auto-detected via SIC classification if
+    # the caller doesn't already know the ticker's sector (a brand-new
+    # scan-discovered ticker); market proxy (SPY) always runs
+    detected_sector = None
+    if not sector_etf:
+        detected_sector = get_sector_for_ticker(ticker)
+        if detected_sector:
+            sector_etf = SECTOR_PROXY.get(detected_sector)
+
     sector_return_pct = None
     sector_leadership_score = None
     if sector_etf:
@@ -478,6 +533,7 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
         "maGapPct": ma_gap_pct,
         "technicalStructureScore": technical_score,
         "sectorEtf": sector_etf.upper() if sector_etf else None,
+        "detectedSector": detected_sector,
         "sectorReturnPct": sector_return_pct,
         "sectorLeadershipScore": sector_leadership_score,
         "marketTicker": "SPY",
@@ -893,6 +949,46 @@ def migrate_add_real_volatility(session: dict = Depends(require_auth), db: Sessi
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_technicals JSON"))
     db.commit()
     return {"migrated": True}
+
+
+class OpportunityCreate(BaseModel):
+    id: str
+    sector: str = ""
+    status: str = "New"
+    opportunityScore: int
+    volatilityScore: int
+    volBias: str
+    ivRank: int = 50
+    directionalLean: str = "Neutral"
+    suggestedTrade: str = "Pending trade construction"
+    thesis: str = ""
+    notes: str = ""
+    pendingAnalysis: bool = True
+    price: Optional[float] = None
+    realVolatility: Optional[dict] = None
+    realRegime: Optional[dict] = None
+    realTechnicals: Optional[dict] = None
+
+
+@app.post("/api/opportunities")
+def create_opportunity(opp: OpportunityCreate, session: dict = Depends(require_auth), db: Session = Depends(get_db)):
+    """Creates a genuinely new opportunity row — the first write
+    endpoint that isn't updating something already seeded. Used when
+    Real Scan discovers a ticker outside the original mock ten."""
+    existing = db.query(models.Opportunity).filter(models.Opportunity.id == opp.id).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Opportunity {opp.id} already exists")
+    new_opp = models.Opportunity(
+        id=opp.id, sector=opp.sector, status=opp.status,
+        opportunity_score=opp.opportunityScore, volatility_score=opp.volatilityScore,
+        vol_bias=opp.volBias, iv_rank=opp.ivRank, directional_lean=opp.directionalLean,
+        suggested_trade=opp.suggestedTrade, thesis=opp.thesis, notes=opp.notes,
+        pending_analysis=opp.pendingAnalysis, price=opp.price,
+        real_volatility=opp.realVolatility, real_regime=opp.realRegime, real_technicals=opp.realTechnicals
+    )
+    db.add(new_opp)
+    db.commit()
+    return {"created": True, "id": opp.id}
 
 
 @app.get("/api/opportunities")
