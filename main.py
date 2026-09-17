@@ -16,6 +16,13 @@ Env vars needed — set in Render's dashboard, never committed to GitHub:
   MASSIVE_API_KEY     - from your massive.com dashboard (added this
                         checkpoint) — Polygon.io rebranded to Massive
                         in Oct 2025, same data, same API shape
+  FINNHUB_API_KEY     - from your finnhub.io dashboard — free tier,
+                        used only for real Catalyst Strength data
+                        (next-earnings date/timing). Massive's own
+                        earnings feed (Benzinga partner data) is a
+                        $99/month add-on on every tier, free or paid,
+                        so this is a separate provider with its own
+                        free rate bucket (60 calls/min)
 
 The app refuses to start if any of these are missing, on purpose — a
 silent insecure or broken fallback is worse than a loud failure at
@@ -48,6 +55,7 @@ from seed_data import SEED_OPPORTUNITIES, SEED_JOURNAL_ENTRIES
 SECRET_KEY = os.environ.get("SECRET_KEY")
 APP_PASSWORD_HASH = os.environ.get("APP_PASSWORD_HASH")
 MASSIVE_API_KEY = os.environ.get("MASSIVE_API_KEY")
+FINNHUB_API_KEY = os.environ.get("FINNHUB_API_KEY")
 
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is not set. Set it in Render's Environment tab.")
@@ -55,6 +63,8 @@ if not APP_PASSWORD_HASH:
     raise RuntimeError("APP_PASSWORD_HASH environment variable is not set. Set it in Render's Environment tab.")
 if not MASSIVE_API_KEY:
     raise RuntimeError("MASSIVE_API_KEY environment variable is not set. Set it in Render's Environment tab.")
+if not FINNHUB_API_KEY:
+    raise RuntimeError("FINNHUB_API_KEY environment variable is not set. Set it in Render's Environment tab.")
 
 COOKIE_NAME = "oip_session"
 SESSION_MAX_AGE = 60 * 60 * 24 * 14  # 14 days
@@ -404,9 +414,11 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     fetch's latest close instead. Net result: 5 real calls total (3
     Stocks, 2 Options) instead of 8 — fits inside one minute on both
     rate buckets, which is what makes Stage 2's per-ticker sequencing
-    workable without a paid tier. Response is shaped to drop directly
-    into the existing applyRealVolatility / applyRealTechnicals /
-    applyRealRegime functions client-side — no new frontend mutation
+    workable without a paid tier. Also makes one call to Finnhub (a
+    separate provider and rate bucket) for real Catalyst Strength data.
+    Response is shaped to drop directly into the existing
+    applyRealVolatility / applyRealTechnicals / applyRealRegime /
+    applyRealCatalyst functions client-side — no new frontend mutation
     logic needed, just new plumbing to call them."""
     ticker = ticker.upper()
     end = date.today()
@@ -518,6 +530,22 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
         market_closes = [bar["c"] for bar in market_results]
         market_return_pct = round(((market_closes[-1] - market_closes[-6]) / market_closes[-6]) * 100, 2)
 
+    # Catalyst — separate provider (Finnhub) and rate bucket from
+    # everything above, so this doesn't tighten the Massive pacing.
+    # Failure here shouldn't sink the whole deep-dive; the caller
+    # already handles a None catalyst as "still mock" for this ticker.
+    earnings_date = None
+    catalyst_hour = None
+    days_to_catalyst = None
+    try:
+        earnings = fetch_next_earnings(ticker)
+        if earnings:
+            earnings_date = earnings["earningsDate"]
+            catalyst_hour = earnings["hour"]
+            days_to_catalyst = earnings["daysToCatalyst"]
+    except HTTPException:
+        pass
+
     return {
         "ticker": ticker,
         "price": price,
@@ -537,7 +565,10 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
         "sectorReturnPct": sector_return_pct,
         "sectorLeadershipScore": sector_leadership_score,
         "marketTicker": "SPY",
-        "marketReturnPct": market_return_pct
+        "marketReturnPct": market_return_pct,
+        "earningsDate": earnings_date,
+        "catalystHour": catalyst_hour,
+        "daysToCatalyst": days_to_catalyst
     }
 
 
@@ -683,6 +714,52 @@ def _fetch_json(url):
         raise HTTPException(status_code=502, detail=f"Massive API returned {e.code}: {body}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not reach Massive API: {str(e)}")
+
+
+def _fetch_finnhub_json(url):
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            return json.loads(response.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        raise HTTPException(status_code=502, detail=f"Finnhub API returned {e.code}: {body}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not reach Finnhub API: {str(e)}")
+
+
+def fetch_next_earnings(ticker):
+    """Real next-earnings lookup via Finnhub's free earnings calendar —
+    a separate provider and rate bucket (60 calls/min) from Massive, so
+    this doesn't compete with the Stocks/Options call budget. Verified
+    live before building against it: Massive's own earnings data
+    (Benzinga partner feed) is a $99/month add-on on every tier, free
+    or paid, so this was the free-tier-first alternative. Returns None
+    if nothing is scheduled in the lookup window, rather than guessing."""
+    end = date.today() + timedelta(days=365)
+    url = (f"https://finnhub.io/api/v1/calendar/earnings?from={date.today().isoformat()}"
+           f"&to={end.isoformat()}&symbol={ticker.upper()}&token={FINNHUB_API_KEY}")
+    payload = _fetch_finnhub_json(url)
+    entries = payload.get("earningsCalendar", [])
+    if not entries:
+        return None
+    upcoming = sorted(entries, key=lambda e: e["date"])[0]
+    earnings_date = date.fromisoformat(upcoming["date"])
+    return {
+        "earningsDate": upcoming["date"],
+        "hour": upcoming.get("hour") or None,
+        "daysToCatalyst": (earnings_date - date.today()).days
+    }
+
+
+@app.get("/api/real-catalyst-check/{ticker}")
+def real_catalyst_check(ticker: str, session: dict = Depends(require_auth)):
+    """Real next-earnings date/timing for Catalyst Strength — the
+    largest-weighted Opportunity Score driver, previously a random
+    placeholder. One call against Finnhub's free tier."""
+    result = fetch_next_earnings(ticker.upper())
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No upcoming earnings found for {ticker.upper()} in the next year")
+    return {"ticker": ticker.upper(), **result}
 
 
 def parse_occ_ticker(occ_ticker):
@@ -947,6 +1024,7 @@ def migrate_add_real_volatility(session: dict = Depends(require_auth), db: Sessi
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_volatility JSON"))
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_regime JSON"))
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_technicals JSON"))
+    db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_catalyst JSON"))
     db.commit()
     return {"migrated": True}
 
@@ -965,9 +1043,11 @@ class OpportunityCreate(BaseModel):
     notes: str = ""
     pendingAnalysis: bool = True
     price: Optional[float] = None
+    daysToCatalyst: Optional[int] = None
     realVolatility: Optional[dict] = None
     realRegime: Optional[dict] = None
     realTechnicals: Optional[dict] = None
+    realCatalyst: Optional[dict] = None
 
 
 @app.post("/api/opportunities")
@@ -983,8 +1063,9 @@ def create_opportunity(opp: OpportunityCreate, session: dict = Depends(require_a
         opportunity_score=opp.opportunityScore, volatility_score=opp.volatilityScore,
         vol_bias=opp.volBias, iv_rank=opp.ivRank, directional_lean=opp.directionalLean,
         suggested_trade=opp.suggestedTrade, thesis=opp.thesis, notes=opp.notes,
-        pending_analysis=opp.pendingAnalysis, price=opp.price,
-        real_volatility=opp.realVolatility, real_regime=opp.realRegime, real_technicals=opp.realTechnicals
+        pending_analysis=opp.pendingAnalysis, price=opp.price, days_to_catalyst=opp.daysToCatalyst,
+        real_volatility=opp.realVolatility, real_regime=opp.realRegime, real_technicals=opp.realTechnicals,
+        real_catalyst=opp.realCatalyst
     )
     db.add(new_opp)
     db.commit()
@@ -1000,8 +1081,9 @@ def list_opportunities(session: dict = Depends(require_auth), db: Session = Depe
             "opportunityScore": o.opportunity_score, "volatilityScore": o.volatility_score,
             "volBias": o.vol_bias, "ivRank": o.iv_rank, "directionalLean": o.directional_lean,
             "suggestedTrade": o.suggested_trade, "thesis": o.thesis, "notes": o.notes,
-            "pendingAnalysis": o.pending_analysis, "price": o.price, "realVolatility": o.real_volatility,
-            "realRegime": o.real_regime, "realTechnicals": o.real_technicals,
+            "pendingAnalysis": o.pending_analysis, "price": o.price, "daysToCatalyst": o.days_to_catalyst,
+            "realVolatility": o.real_volatility, "realRegime": o.real_regime, "realTechnicals": o.real_technicals,
+            "realCatalyst": o.real_catalyst,
         }
         for o in opps
     ]
@@ -1028,18 +1110,20 @@ class OpportunityUpdate(BaseModel):
     notes: Optional[str] = None
     price: Optional[float] = None
     volBias: Optional[str] = None
+    daysToCatalyst: Optional[int] = None
     realVolatility: Optional[dict] = None
     realRegime: Optional[dict] = None
     realTechnicals: Optional[dict] = None
+    realCatalyst: Optional[dict] = None
 
 
 @app.patch("/api/opportunities/{opp_id}")
 def update_opportunity(opp_id: str, update: OpportunityUpdate,
                         session: dict = Depends(require_auth), db: Session = Depends(get_db)):
-    """Persists status, notes, and real price/volatility/regime data
-    pulled from Massive. Everything else an opportunity shows (driver
-    breakdowns, trade construction) is still computed fresh client-side
-    each load, not round-tripped through here yet."""
+    """Persists status, notes, and real price/volatility/regime/catalyst
+    data pulled from Massive and Finnhub. Everything else an opportunity
+    shows (driver breakdowns, trade construction) is still computed
+    fresh client-side each load, not round-tripped through here yet."""
     opp = db.query(models.Opportunity).filter(models.Opportunity.id == opp_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail=f"No opportunity with id {opp_id}")
@@ -1051,12 +1135,16 @@ def update_opportunity(opp_id: str, update: OpportunityUpdate,
         opp.price = update.price
     if update.volBias is not None:
         opp.vol_bias = update.volBias
+    if update.daysToCatalyst is not None:
+        opp.days_to_catalyst = update.daysToCatalyst
     if update.realVolatility is not None:
         opp.real_volatility = update.realVolatility
     if update.realRegime is not None:
         opp.real_regime = update.realRegime
     if update.realTechnicals is not None:
         opp.real_technicals = update.realTechnicals
+    if update.realCatalyst is not None:
+        opp.real_catalyst = update.realCatalyst
     db.commit()
     return {"updated": True, "id": opp_id, "status": opp.status, "notes": opp.notes}
 

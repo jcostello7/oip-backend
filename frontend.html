@@ -1176,6 +1176,66 @@ async function fetchRealTechnicals(o) {
   }
 }
 
+// Pure mutation logic for applying real Catalyst data — same
+// extraction pattern as applyRealVolatility/applyRealRegime/
+// applyRealTechnicals. Reuses catalystFreshnessScore (already the
+// tested proximity curve used by Conviction's catalyst sub-factor)
+// for the Opportunity Score "Catalyst strength" driver too, rather
+// than inventing a second scoring formula for the same underlying
+// signal. Conviction's own catalyst sub-factor updates for free since
+// it already reads o.daysToCatalyst directly.
+function applyRealCatalyst(o, real) {
+  o.daysToCatalyst = real.daysToCatalyst;
+  o.realCatalyst = {
+    earningsDate: real.earningsDate,
+    hour: real.hour,
+    fetchedAt: real.fetchedAt || nowStamp()
+  };
+
+  const val = catalystFreshnessScore(real.daysToCatalyst);
+  const idx = o.oppDrivers.findIndex(([name]) => name === "Catalyst strength");
+  if (idx >= 0) o.oppDrivers[idx] = ["Catalyst strength", val];
+  else o.oppDrivers.push(["Catalyst strength", val]);
+  o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+
+  if (o.tradeQuality) o.conviction = evaluateConviction(o);
+  o.lastUpdated = nowStamp();
+}
+
+// Pulls the real next-earnings date from Finnhub's free earnings
+// calendar — a separate provider and rate bucket (60 calls/min) from
+// Massive, so this doesn't compete with the volatility/regime/
+// technicals budget.
+async function fetchRealCatalyst(o) {
+  const statusEl = document.getElementById("realCatalystStatus");
+  const btn = document.getElementById("fetchRealCatalystBtn");
+  if (statusEl) statusEl.textContent = "Fetching real data from Finnhub…";
+  if (btn) btn.disabled = true;
+
+  try {
+    const res = await fetch(`/api/real-catalyst-check/${encodeURIComponent(o.id)}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (HTTP ${res.status})`);
+    }
+    const result = await res.json();
+    applyRealCatalyst(o, result);
+
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ daysToCatalyst: o.daysToCatalyst, realCatalyst: o.realCatalyst })
+    }).catch(err => console.warn("Real catalyst fetched but failed to sync to backend:", err));
+
+    renderQueue();
+    renderWorkspace();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Failed: " + err.message;
+    if (btn) btn.disabled = false;
+    console.warn("Real catalyst fetch failed:", err);
+  }
+}
+
 // Pure mutation logic for a status change — extracted so it's shared
 // between the UI's status dropdown and the startup merge (applying a
 // status that was persisted to the backend on a previous visit needs
@@ -2259,6 +2319,9 @@ function renderWorkspace() {
       <button class="sim-btn" id="fetchRealVolBtn">${o.realVolatility ? 'Refresh real volatility' : 'Get real volatility'}</button>
       <div id="realVolStatus" class="updated-tag" style="margin-top:8px;"></div>
       ${o.realVolatility ? `<div class="updated-tag" style="margin-top:6px;">Pulled ${o.realVolatility.fetchedAt}. Price and volatility bias are real — Volatility Score's composite (${o.volatilityScore}) is still mock, since five of its seven factors don't have a real data source wired in yet.</div>` : `<div class="updated-tag" style="margin-top:6px;">Not yet checked against real data — everything below is still illustrative.</div>`}
+      <button class="sim-btn" id="fetchRealCatalystBtn" style="margin-top:10px;">${o.realCatalyst ? 'Refresh real catalyst' : 'Get real catalyst'} <span class="driver-group-note">(Finnhub — free tier, 1 call)</span></button>
+      <div id="realCatalystStatus" class="updated-tag" style="margin-top:6px;"></div>
+      ${o.realCatalyst ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realCatalyst.fetchedAt} — next earnings ${o.realCatalyst.earningsDate}${o.realCatalyst.hour ? ` (${o.realCatalyst.hour.toUpperCase()})` : ''}, ${o.daysToCatalyst}d out. Catalyst strength driver and Conviction's Catalyst sub-factor are now real.</div>` : `<div class="updated-tag" style="margin-top:4px;">Not yet checked — Catalyst strength driver above is still a placeholder.</div>`}
     </div>
 
     ${regimeHtml}
@@ -2352,6 +2415,8 @@ function renderWorkspace() {
   if (fetchRealRegimeBtn) fetchRealRegimeBtn.addEventListener("click", () => fetchRealRegime(o));
   const fetchRealTechnicalsBtn = document.getElementById("fetchRealTechnicalsBtn");
   if (fetchRealTechnicalsBtn) fetchRealTechnicalsBtn.addEventListener("click", () => fetchRealTechnicals(o));
+  const fetchRealCatalystBtn = document.getElementById("fetchRealCatalystBtn");
+  if (fetchRealCatalystBtn) fetchRealCatalystBtn.addEventListener("click", () => fetchRealCatalyst(o));
 
   const journalOutcomeEl = document.getElementById("journalOutcome");
   if (journalOutcomeEl) journalOutcomeEl.addEventListener("change", (e) => { getJournalDraft(o).outcome = e.target.value; });
@@ -2587,11 +2652,11 @@ async function deepDiveTopMovers() {
 // logic. Enters as New + pendingAnalysis, same as any freshly-injected
 // mock opportunity, so moving it to Analyzed triggers the same
 // already-tested placeholder-text-and-trade-construction flow.
-// Two fields have no real source yet and are honest placeholders,
-// same limitation flagged everywhere else in this build: Catalyst
-// strength (no earnings-calendar data source) and driver-level
-// Liquidity (already passed the dollar-volume filter, so a moderate
-// default is defensible, not a precise measure).
+// Catalyst strength is real when the deep-dive found an upcoming
+// earnings date (via Finnhub); driver-level Liquidity remains a
+// placeholder — it already passed the dollar-volume filter, so a
+// moderate default is defensible, not a precise measure, and a real
+// per-strike liquidity read belongs to Trade Quality, not here.
 function createOpportunityFromScan(ticker, deepDive) {
   const sector = deepDive.detectedSector || "Diversified";
   const oppDrivers = [
@@ -2643,6 +2708,11 @@ function createOpportunityFromScan(ticker, deepDive) {
     maGapPct: deepDive.maGapPct, technicalStructureScore: deepDive.technicalStructureScore,
     sectorEtf: deepDive.sectorEtf, sectorReturnPct: deepDive.sectorReturnPct, sectorLeadershipScore: deepDive.sectorLeadershipScore
   });
+  if (deepDive.daysToCatalyst !== null && deepDive.daysToCatalyst !== undefined) {
+    applyRealCatalyst(o, {
+      earningsDate: deepDive.earningsDate, hour: deepDive.catalystHour, daysToCatalyst: deepDive.daysToCatalyst
+    });
+  }
 
   return o;
 }
@@ -2663,8 +2733,9 @@ async function addScanResultToQueue(ticker) {
       opportunityScore: o.opportunityScore, volatilityScore: o.volatilityScore,
       volBias: o.volBias, ivRank: o.ivRank, directionalLean: o.directionalLean,
       suggestedTrade: o.suggestedTrade, thesis: o.thesis, notes: o.notes,
-      pendingAnalysis: o.pendingAnalysis, price: o.price,
-      realVolatility: o.realVolatility, realRegime: o.realRegime, realTechnicals: o.realTechnicals
+      pendingAnalysis: o.pendingAnalysis, price: o.price, daysToCatalyst: o.daysToCatalyst,
+      realVolatility: o.realVolatility, realRegime: o.realRegime, realTechnicals: o.realTechnicals,
+      realCatalyst: o.realCatalyst
     })
   }).catch(err => console.warn("Added to Queue locally but failed to sync to backend:", err));
 
@@ -2692,7 +2763,7 @@ function hydrateOpportunityFromBackend(bo) {
     id: bo.id, sector: bo.sector || "Diversified", status: bo.status || "New",
     dateAdded: nowStamp(), lastUpdated: nowStamp(), pendingAnalysis: !!bo.pendingAnalysis,
     oppDrivers, volDrivers, directionalLean: bo.directionalLean || "Neutral",
-    price: bo.price, historicalMovePct: 5, impliedMovePct: 5, daysToCatalyst: 20,
+    price: bo.price, historicalMovePct: 5, impliedMovePct: 5, daysToCatalyst: bo.daysToCatalyst ?? 20,
     tradeConstruction: null, tradeQuality: null, conviction: null,
     suggestedTrade: bo.suggestedTrade || "Pending trade construction",
     thesis: bo.thesis || "", thinking: "", riskFactors: "", notes: bo.notes || "",
@@ -2711,6 +2782,9 @@ function hydrateOpportunityFromBackend(bo) {
     });
   }
   if (bo.realTechnicals) applyRealTechnicals(o, bo.realTechnicals);
+  if (bo.realCatalyst) {
+    applyRealCatalyst(o, { ...bo.realCatalyst, daysToCatalyst: bo.daysToCatalyst });
+  }
 
   if (!o.pendingAnalysis && !o.thesis) {
     o.thesis = "Analysis complete — see the driver breakdown below for the basis of this score.";
@@ -2873,6 +2947,9 @@ async function initFromBackend() {
             sectorLeadershipScore: bo.realTechnicals.sectorLeadershipScore,
             fetchedAt: bo.realTechnicals.fetchedAt
           });
+        }
+        if (bo.realCatalyst) {
+          applyRealCatalyst(local, { ...bo.realCatalyst, daysToCatalyst: bo.daysToCatalyst });
         }
       });
     }
