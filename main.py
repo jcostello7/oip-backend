@@ -1044,6 +1044,8 @@ class OpportunityCreate(BaseModel):
     pendingAnalysis: bool = True
     price: Optional[float] = None
     daysToCatalyst: Optional[int] = None
+    oppDrivers: Optional[list] = None
+    volDrivers: Optional[list] = None
     realVolatility: Optional[dict] = None
     realRegime: Optional[dict] = None
     realTechnicals: Optional[dict] = None
@@ -1054,7 +1056,15 @@ class OpportunityCreate(BaseModel):
 def create_opportunity(opp: OpportunityCreate, session: dict = Depends(require_auth), db: Session = Depends(get_db)):
     """Creates a genuinely new opportunity row — the first write
     endpoint that isn't updating something already seeded. Used when
-    Real Scan discovers a ticker outside the original mock ten."""
+    Real Scan discovers a ticker outside the original mock ten.
+    Persists oppDrivers/volDrivers as-computed at creation time — the
+    fix for a real persistence gap where a scan-discovered opportunity's
+    driver breakdown (Liquidity, the volatility driver set) used to
+    regenerate fresh random values on every reload instead of keeping
+    what was actually shown. Drivers a real-data fetch can recompute
+    (regime, technicals, catalyst) still get correctly overlaid on
+    top of this baseline via their own real_* fields — this baseline
+    only needs to be right, not to anticipate future real overlays."""
     existing = db.query(models.Opportunity).filter(models.Opportunity.id == opp.id).first()
     if existing:
         raise HTTPException(status_code=409, detail=f"Opportunity {opp.id} already exists")
@@ -1064,6 +1074,7 @@ def create_opportunity(opp: OpportunityCreate, session: dict = Depends(require_a
         vol_bias=opp.volBias, iv_rank=opp.ivRank, directional_lean=opp.directionalLean,
         suggested_trade=opp.suggestedTrade, thesis=opp.thesis, notes=opp.notes,
         pending_analysis=opp.pendingAnalysis, price=opp.price, days_to_catalyst=opp.daysToCatalyst,
+        opp_drivers=opp.oppDrivers, vol_drivers=opp.volDrivers,
         real_volatility=opp.realVolatility, real_regime=opp.realRegime, real_technicals=opp.realTechnicals,
         real_catalyst=opp.realCatalyst
     )
@@ -1082,6 +1093,7 @@ def list_opportunities(session: dict = Depends(require_auth), db: Session = Depe
             "volBias": o.vol_bias, "ivRank": o.iv_rank, "directionalLean": o.directional_lean,
             "suggestedTrade": o.suggested_trade, "thesis": o.thesis, "notes": o.notes,
             "pendingAnalysis": o.pending_analysis, "price": o.price, "daysToCatalyst": o.days_to_catalyst,
+            "oppDrivers": o.opp_drivers, "volDrivers": o.vol_drivers,
             "realVolatility": o.real_volatility, "realRegime": o.real_regime, "realTechnicals": o.real_technicals,
             "realCatalyst": o.real_catalyst,
         }
@@ -1111,6 +1123,8 @@ class OpportunityUpdate(BaseModel):
     price: Optional[float] = None
     volBias: Optional[str] = None
     daysToCatalyst: Optional[int] = None
+    oppDrivers: Optional[list] = None
+    volDrivers: Optional[list] = None
     realVolatility: Optional[dict] = None
     realRegime: Optional[dict] = None
     realTechnicals: Optional[dict] = None
@@ -1120,10 +1134,15 @@ class OpportunityUpdate(BaseModel):
 @app.patch("/api/opportunities/{opp_id}")
 def update_opportunity(opp_id: str, update: OpportunityUpdate,
                         session: dict = Depends(require_auth), db: Session = Depends(get_db)):
-    """Persists status, notes, and real price/volatility/regime/catalyst
-    data pulled from Massive and Finnhub. Everything else an opportunity
-    shows (driver breakdowns, trade construction) is still computed
-    fresh client-side each load, not round-tripped through here yet."""
+    """Persists status, notes, real price/volatility/regime/catalyst
+    data pulled from Massive and Finnhub, and the current driver
+    breakdown (oppDrivers/volDrivers) — the latter kept in sync here so
+    a scan-discovered opportunity's stored baseline reflects whatever
+    real overlays have landed since creation, not just its creation-
+    time snapshot. Trade construction/quality/conviction are still
+    derived fresh client-side from this data each load, not stored
+    themselves — they're pure functions of it, so storing them too
+    would just be redundant duplicated state."""
     opp = db.query(models.Opportunity).filter(models.Opportunity.id == opp_id).first()
     if not opp:
         raise HTTPException(status_code=404, detail=f"No opportunity with id {opp_id}")
@@ -1137,6 +1156,10 @@ def update_opportunity(opp_id: str, update: OpportunityUpdate,
         opp.vol_bias = update.volBias
     if update.daysToCatalyst is not None:
         opp.days_to_catalyst = update.daysToCatalyst
+    if update.oppDrivers is not None:
+        opp.opp_drivers = update.oppDrivers
+    if update.volDrivers is not None:
+        opp.vol_drivers = update.volDrivers
     if update.realVolatility is not None:
         opp.real_volatility = update.realVolatility
     if update.realRegime is not None:

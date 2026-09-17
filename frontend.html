@@ -1082,7 +1082,7 @@ async function fetchRealRegime(o) {
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ realRegime: o.realRegime })
+      body: JSON.stringify({ realRegime: o.realRegime, oppDrivers: o.oppDrivers })
     }).catch(err => console.warn("Real regime fetched but failed to sync to backend:", err));
 
     renderQueue();
@@ -1164,7 +1164,7 @@ async function fetchRealTechnicals(o) {
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ realTechnicals: o.realTechnicals })
+      body: JSON.stringify({ realTechnicals: o.realTechnicals, oppDrivers: o.oppDrivers })
     }).catch(err => console.warn("Real technicals fetched but failed to sync to backend:", err));
 
     renderQueue();
@@ -1224,7 +1224,7 @@ async function fetchRealCatalyst(o) {
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ daysToCatalyst: o.daysToCatalyst, realCatalyst: o.realCatalyst })
+      body: JSON.stringify({ daysToCatalyst: o.daysToCatalyst, realCatalyst: o.realCatalyst, oppDrivers: o.oppDrivers })
     }).catch(err => console.warn("Real catalyst fetched but failed to sync to backend:", err));
 
     renderQueue();
@@ -2734,6 +2734,7 @@ async function addScanResultToQueue(ticker) {
       volBias: o.volBias, ivRank: o.ivRank, directionalLean: o.directionalLean,
       suggestedTrade: o.suggestedTrade, thesis: o.thesis, notes: o.notes,
       pendingAnalysis: o.pendingAnalysis, price: o.price, daysToCatalyst: o.daysToCatalyst,
+      oppDrivers: o.oppDrivers, volDrivers: o.volDrivers,
       realVolatility: o.realVolatility, realRegime: o.realRegime, realTechnicals: o.realTechnicals,
       realCatalyst: o.realCatalyst
     })
@@ -2751,14 +2752,21 @@ async function addScanResultToQueue(ticker) {
 // Reload-persistence fix: previously, a backend opportunity with no
 // local match was silently skipped during the startup merge — meaning
 // a scan-discovered opportunity would vanish on reload. This builds a
-// full local object from the backend's stored fields instead. Driver-
-// level detail resets to generic placeholders (same limitation as
-// every opportunity today — only core fields and real-data fields
-// persist, not full engine output), but status, notes, and all real
-// data correctly restore.
+// full local object from the backend's stored fields instead.
+//
+// Driver-breakdown persistence fix: oppDrivers/volDrivers used to be
+// rebuilt with fresh random values on every single reload (a real
+// persistence gap — the driver detail you saw a minute ago wasn't
+// what you'd see again). Now the persisted baseline from creation
+// time is used when present, and only falls back to a random baseline
+// for an opportunity that somehow has none stored. Real-data overlays
+// (regime/technicals/catalyst) still recompute their specific driver
+// entries fresh from their own real_* fields below, same as before —
+// this only fixes the drivers nothing overlays yet (Liquidity, the
+// volatility driver set).
 function hydrateOpportunityFromBackend(bo) {
-  const oppDrivers = makeDrivers(OPP_DRIVER_NAMES, 40, 70);
-  const volDrivers = makeDrivers(VOL_DRIVER_NAMES, 40, 60);
+  const oppDrivers = bo.oppDrivers || makeDrivers(OPP_DRIVER_NAMES, 40, 70);
+  const volDrivers = bo.volDrivers || makeDrivers(VOL_DRIVER_NAMES, 40, 60);
   const o = {
     id: bo.id, sector: bo.sector || "Diversified", status: bo.status || "New",
     dateAdded: nowStamp(), lastUpdated: nowStamp(), pendingAnalysis: !!bo.pendingAnalysis,
