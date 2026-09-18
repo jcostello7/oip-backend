@@ -2487,6 +2487,7 @@ function renderWorkspace() {
       <div style="text-align:right;">
         <select class="status-select" id="statusSelect">${statusOptions}</select>
         <div class="updated-tag">Updated ${o.lastUpdated}</div>
+        ${o.pendingJournalStatus ? `<div class="updated-tag" style="color:var(--accent); margin-top:4px;">↓ Log a journal entry below to confirm moving to ${o.pendingJournalStatus}</div>` : ''}
       </div>
     </div>
 
@@ -2569,7 +2570,7 @@ function renderWorkspace() {
       ${convictionHtml(o)}
     </section>
 
-    <section class="block">
+    <section class="block" id="journalSection">
       <div class="block-label">Journal <span class="driver-group-note">(Section 12)</span></div>
       ${journalFormHtml(o)}
     </section>
@@ -2591,6 +2592,8 @@ function renderWorkspace() {
     if (["Reject", "Open Position", "Closed"].includes(newStatus) && newStatus !== o.status) {
       o.pendingJournalStatus = newStatus;
       renderWorkspace();
+      const journalSection = document.getElementById("journalSection");
+      if (journalSection) journalSection.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
     applyStatusChange(o, newStatus);
