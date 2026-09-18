@@ -401,10 +401,12 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     ticker — this fetches it once and reuses it for HV, RVOL,
     Momentum, and Trend. Also drops the redundant underlying-price
     lookup real_iv_check used to make on its own, reusing this same
-    fetch's latest close instead. Net result: 5 real calls total (3
-    Stocks, 2 Options) instead of 8 — fits inside one minute on both
-    rate buckets, which is what makes Stage 2's per-ticker sequencing
-    workable without a paid tier. Also makes one call to Finnhub (a
+    fetch's latest close instead. Net result: 6 real calls total (3
+    Stocks, 3 Options — the third Options call prices the sibling ATM
+    put for a real implied expected move) instead of 8+ — fits inside
+    one minute on both rate buckets, which is what makes Stage 2's
+    per-ticker sequencing workable without a paid tier. Also makes one
+    call to Finnhub (a
     separate provider and rate bucket) for real Catalyst Strength data.
     Response is shaped to drop directly into the existing
     applyRealVolatility / applyRealTechnicals / applyRealRegime /
@@ -450,6 +452,9 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     option_contract = None
     option_volume = None
     liquidity_score = None
+    implied_move_pct = None
+    historical_move_pct = None
+    expected_move_score = None
     today = date.today()
     candidates = []
     for c in contracts:
@@ -472,6 +477,23 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
             option_contract = contract_ticker
             option_volume = opt_results[0].get("v", 0)
             liquidity_score = compute_liquidity_score(option_volume)
+
+            # Real expected move — same ATM-straddle convention as
+            # vol_bias_check: the sibling put's OCC ticker is built
+            # directly (no second reference-list call), and historical
+            # move scales the already-computed real HV down to this
+            # same days-to-expiration window for a direct comparison.
+            try:
+                put_ticker = build_occ_ticker(parsed["symbol"], parsed["expiration_date"], "put", parsed["strike"])
+                put_payload = _fetch_json(f"https://api.massive.com/v2/aggs/ticker/{put_ticker}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}")
+                put_results = put_payload.get("results", [])
+                if put_results:
+                    put_price = put_results[0]["c"]
+                    implied_move_pct = round((option_price + put_price) / price * 100, 2)
+                    historical_move_pct = round(hv_pct * math.sqrt((exp_date - today).days / 365), 2)
+                    expected_move_score = compute_expected_move_score(implied_move_pct)
+            except HTTPException:
+                pass
 
     spread = round(iv_pct - hv_pct, 2) if iv_pct is not None else None
     if spread is None:
@@ -539,6 +561,9 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
         "ivContract": option_contract,
         "optionVolume": option_volume,
         "liquidityScore": liquidity_score,
+        "impliedMovePct": implied_move_pct,
+        "historicalMovePct": historical_move_pct,
+        "expectedMoveScore": expected_move_score,
         "relativeVolume": round(rvol, 2),
         "relativeVolumeScore": rvol_score,
         "priceChangePct": ten_day_return_pct,
@@ -782,6 +807,28 @@ def parse_occ_ticker(occ_ticker):
     }
 
 
+def build_occ_ticker(symbol, expiration_date, option_type, strike):
+    """Inverse of parse_occ_ticker — builds the OCC ticker for a sibling
+    contract (same underlying/expiration/strike, opposite type) without
+    a second reference-endpoint call. Round-trip verified against a
+    real ticker pulled live earlier: build_occ_ticker("AAPL",
+    "2026-09-18", "call", 50) reproduces "O:AAPL260918C00050000" exactly."""
+    yy_mm_dd = expiration_date.replace("-", "")[2:]
+    cp = "C" if option_type == "call" else "P"
+    strike_str = f"{round(strike * 1000):08d}"
+    return f"O:{symbol}{yy_mm_dd}{cp}{strike_str}"
+
+
+def compute_expected_move_score(implied_move_pct):
+    """Catalyst expected move magnitude — how big a move does the
+    options market itself expect by expiration. Bigger real implied
+    move = more support for a vol-opportunity thesis, same unsigned-
+    magnitude idiom as the other Volatility Score factors. Typical
+    earnings-implied moves run from ~3% (mega-caps) to 20%+ (small,
+    volatile names), so 5% -> ~30, 15% -> ~70, 20%+ -> 90+."""
+    return max(10, min(95, round(10 + implied_move_pct * 4)))
+
+
 def norm_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
@@ -910,6 +957,24 @@ def real_iv_check(ticker: str, session: dict = Depends(require_auth)):
     T = (exp_date - today).days / 365.0
     computed_iv = implied_vol_bisection(option_market_price, underlying_price, parsed["strike"], T, RISK_FREE_RATE)
 
+    # Real implied expected move — the standard market convention:
+    # ATM straddle price (call + put, same strike/expiration) as a %
+    # of the underlying's price. The put is the sibling contract of
+    # the one already fetched for IV; its OCC ticker is built directly
+    # (build_occ_ticker) rather than costing a second reference-list
+    # call. Failure here shouldn't sink the IV result itself, so it's
+    # wrapped and left None on any problem.
+    implied_move_pct = None
+    try:
+        put_ticker = build_occ_ticker(parsed["symbol"], parsed["expiration_date"], "put", parsed["strike"])
+        put_payload = _fetch_json(f"https://api.massive.com/v2/aggs/ticker/{put_ticker}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}")
+        put_results = put_payload.get("results", [])
+        if put_results:
+            put_price = put_results[0]["c"]
+            implied_move_pct = round((option_market_price + put_price) / underlying_price * 100, 2)
+    except HTTPException:
+        pass
+
     return {
         "ticker": ticker.upper(),
         "underlyingPrice": underlying_price,
@@ -921,6 +986,7 @@ def real_iv_check(ticker: str, session: dict = Depends(require_auth)):
         "impliedVolatilityPct": round(computed_iv * 100, 2),
         "optionVolume": option_volume,
         "liquidityScore": compute_liquidity_score(option_volume),
+        "impliedMovePct": implied_move_pct,
         "method": "Black-Scholes inversion on real EOD option price — Options Basic only, no paid tier"
     }
 
@@ -1035,6 +1101,15 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
     else:
         bias = "Neutral"
 
+    # Real expected move, both halves. Implied comes straight off the
+    # ATM straddle real_iv_check already priced. Historical is the same
+    # real HV scaled down from its annualized figure to the option's
+    # actual days-to-expiration window, so the two numbers are directly
+    # comparable (an apples-to-apples move size, not vol-in-different-units).
+    implied_move_pct = iv_result["impliedMovePct"]
+    historical_move_pct = round(hv_pct * math.sqrt(iv_result["daysToExpiration"] / 365), 2)
+    expected_move_score = compute_expected_move_score(implied_move_pct) if implied_move_pct is not None else None
+
     return {
         "ticker": ticker.upper(),
         "price": iv_result["underlyingPrice"],
@@ -1045,7 +1120,10 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
         "spread": spread,
         "volBias": bias,
         "optionVolume": iv_result["optionVolume"],
-        "liquidityScore": iv_result["liquidityScore"]
+        "liquidityScore": iv_result["liquidityScore"],
+        "impliedMovePct": implied_move_pct,
+        "historicalMovePct": historical_move_pct,
+        "expectedMoveScore": expected_move_score
     }
 
 
@@ -1058,9 +1136,11 @@ def real_vol_drivers_check(ticker: str, sector_etf: Optional[str] = None, sessio
     already uses), Sector volatility regime (if sector_etf is given),
     and Historical catalyst reactions (real EPS-surprise history via
     Finnhub — a separate provider/rate bucket, doesn't count against
-    the Massive budget below). Catalyst expected move is the only one
-    deliberately not here — it needs real multi-leg straddle pricing,
-    its own scoped item, not a quick add.
+    the Massive budget below). Catalyst expected move (the 7th factor)
+    is deliberately not here — it's computed in real_iv_check/
+    vol_bias_check instead, as a byproduct of the ATM call already
+    priced there for IV, and applied via the "Get real volatility"
+    button rather than this one.
     Up to 5 real Massive calls total (price history, options reference,
     near-dated option price, far-dated option price, sector ETF price
     history) — fits the 5-calls/min free tier ceiling in one request,
