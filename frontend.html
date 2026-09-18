@@ -2025,30 +2025,36 @@ let deepDiveStatus = "";
 function getJournalDraft(o) {
   if (!journalDraftByOpp[o.id]) {
     const existing = o.journalEntryId ? journalEntries.find(e => e.id === o.journalEntryId) : null;
+    const effectiveStatus = o.pendingJournalStatus || o.status;
     journalDraftByOpp[o.id] = existing
       ? { outcome: existing.outcome, realizedPnL: existing.realizedPnL, lessonsLearned: existing.lessonsLearned }
-      : { outcome: o.status === "Reject" ? "Passed" : "Win", realizedPnL: "", lessonsLearned: "" };
+      : { outcome: effectiveStatus === "Reject" ? "Passed" : "Win", realizedPnL: "", lessonsLearned: "" };
   }
   return journalDraftByOpp[o.id];
 }
 
+// Also the enforcement point: if a status change is pending (see the
+// statusSelect handler), saving here is what actually applies it —
+// there's no other path from Reject/Open Position/Closed selected in
+// the dropdown to that status actually taking effect.
 function saveJournalEntry(o) {
   const draft = getJournalDraft(o);
+  const effectiveStatus = o.pendingJournalStatus || o.status;
   const entry = {
     id: o.journalEntryId || ("J-" + Date.now() + "-" + Math.floor(Math.random() * 1000)),
     oppId: o.id,
     ticker: o.id,
     sector: o.sector,
     loggedDate: nowStamp(),
-    statusAtLog: o.status,
+    statusAtLog: effectiveStatus,
     opportunityScore: o.opportunityScore,
     volatilityScore: o.volatilityScore,
     tradeQualityComposite: o.tradeQuality ? o.tradeQuality.quality.composite : null,
     convictionComposite: o.conviction ? o.conviction.composite : null,
     structure: o.suggestedTrade,
     thesis: o.thesis,
-    rationale: (o.status === "Reject" && o.rejection) ? o.rejection.reason : o.riskFactors,
-    outcome: draft.outcome,
+    rationale: (effectiveStatus === "Reject" && o.rejection) ? o.rejection.reason : o.riskFactors,
+    outcome: effectiveStatus === "Open Position" ? "Open" : draft.outcome,
     realizedPnL: draft.realizedPnL,
     lessonsLearned: draft.lessonsLearned,
     regimeAtLog: (o.regime && o.regime.sectorFlag) ? o.regime.sectorFlag.level : null,
@@ -2067,6 +2073,19 @@ function saveJournalEntry(o) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(entry)
   }).catch(err => console.warn("Journal entry saved locally but failed to sync to backend:", err));
+
+  if (o.pendingJournalStatus) {
+    const confirmedStatus = o.pendingJournalStatus;
+    o.pendingJournalStatus = null;
+    applyStatusChange(o, confirmedStatus);
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: o.status })
+    }).catch(err => console.warn("Status changed locally but failed to sync to backend:", err));
+    renderQueue();
+    renderChips();
+  }
 }
 
 function getCustomLegs(oppId) { return customLegsByOpp[oppId] || []; }
@@ -2266,15 +2285,39 @@ function convictionHtml(o) {
   `;
 }
 
+// Enforcement: moving to Reject, Open Position, or Closed is gated by
+// the status-select handler, which sets o.pendingJournalStatus instead
+// of applying the change immediately. This form then renders against
+// that pending status (or the real one, for editing an existing entry
+// later) and saveJournalEntry is what actually finalizes the move —
+// so there's no way to reach any of the three without a journal note.
 function journalFormHtml(o) {
-  if (o.status !== "Closed" && o.status !== "Reject") {
-    return `<div class="block-body">Available once this reaches Closed or Reject — those are the two terminal states worth a permanent record.</div>`;
+  const effectiveStatus = o.pendingJournalStatus || o.status;
+  if (effectiveStatus !== "Closed" && effectiveStatus !== "Reject" && effectiveStatus !== "Open Position") {
+    return `<div class="block-body">Available once this reaches Open Position, Closed, or Reject — those are the states worth a permanent record.</div>`;
   }
+  const pendingBanner = o.pendingJournalStatus ? `
+    <div class="updated-tag" style="margin-bottom:10px; color:var(--accent);">Log a journal entry to confirm moving to <strong>${o.pendingJournalStatus}</strong>.
+      <button class="sim-btn" id="cancelPendingStatusBtn" style="margin-left:8px; padding:2px 10px;">Cancel</button>
+    </div>` : '';
+
+  if (effectiveStatus === "Open Position") {
+    const draft = getJournalDraft(o);
+    return `
+      ${pendingBanner}
+      <div class="tc-row">
+        <span class="tc-label">Entry note</span>
+        <textarea class="notes" id="journalLessons" placeholder="Why this trade, why now — what you'd want to remember about entering it.">${draft.lessonsLearned}</textarea>
+      </div>
+      <button class="sim-btn" id="saveJournalBtn" style="margin-top:8px;">${o.pendingJournalStatus ? 'Log entry and confirm' : 'Update entry note'}</button>
+    `;
+  }
+
   const draft = getJournalDraft(o);
-  const outcomeOptions = o.status === "Reject"
+  const outcomeOptions = effectiveStatus === "Reject"
     ? ["Passed", "Missed opportunity", "Good call"]
     : ["Win", "Loss", "Breakeven"];
-  const pnlField = o.status === "Closed" ? `
+  const pnlField = effectiveStatus === "Closed" ? `
     <div class="tc-row">
       <span class="tc-label">Realized P&amp;L</span>
       <input type="text" class="notes" id="journalPnl" style="min-height:auto; padding:8px 12px;" placeholder="e.g. +320 or -150" value="${draft.realizedPnL}">
@@ -2283,6 +2326,7 @@ function journalFormHtml(o) {
     ? `<div class="updated-tag" style="margin-top:8px;">Logged ${(journalEntries.find(e => e.id === o.journalEntryId) || {}).loggedDate || ''}</div>`
     : '';
   return `
+    ${pendingBanner}
     <div class="tc-row">
       <span class="tc-label">Outcome</span>
       <select class="status-select" id="journalOutcome">
@@ -2294,7 +2338,7 @@ function journalFormHtml(o) {
       <span class="tc-label">Lessons learned</span>
       <textarea class="notes" id="journalLessons" placeholder="What would you tell yourself next time?">${draft.lessonsLearned}</textarea>
     </div>
-    <button class="sim-btn" id="saveJournalBtn" style="margin-top:8px;">${o.journalEntryId ? 'Update journal entry' : 'Log to journal'}</button>
+    <button class="sim-btn" id="saveJournalBtn" style="margin-top:8px;">${o.pendingJournalStatus ? 'Log entry and confirm' : (o.journalEntryId ? 'Update journal entry' : 'Log to journal')}</button>
     ${existingTag}
   `;
 }
@@ -2537,7 +2581,19 @@ function renderWorkspace() {
   `;
 
   document.getElementById("statusSelect").addEventListener("change", (e) => {
-    applyStatusChange(o, e.target.value);
+    const newStatus = e.target.value;
+    // Reject, Open Position, and Closed are the three transitions that
+    // deserve a permanent record — don't apply the status change yet;
+    // gate it behind saving a journal entry (see saveJournalEntry),
+    // which is what actually finalizes it. Re-rendering resets the
+    // dropdown's displayed value back to o.status since statusOptions
+    // is rebuilt from it, undoing the premature visual selection.
+    if (["Reject", "Open Position", "Closed"].includes(newStatus) && newStatus !== o.status) {
+      o.pendingJournalStatus = newStatus;
+      renderWorkspace();
+      return;
+    }
+    applyStatusChange(o, newStatus);
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -2593,6 +2649,11 @@ function renderWorkspace() {
   if (saveJournalBtn) saveJournalBtn.addEventListener("click", () => {
     saveJournalEntry(o);
     updateJournalToggleLabel();
+    renderWorkspace();
+  });
+  const cancelPendingStatusBtn = document.getElementById("cancelPendingStatusBtn");
+  if (cancelPendingStatusBtn) cancelPendingStatusBtn.addEventListener("click", () => {
+    o.pendingJournalStatus = null;
     renderWorkspace();
   });
 }
