@@ -943,7 +943,10 @@ function ageOpportunityCatalyst(o) {
 // it's shared between the live "Get real volatility" button and the
 // startup merge (applying data that was persisted on a previous visit
 // needs to run through the exact same downstream recompute, not just
-// silently overwrite fields).
+// silently overwrite fields). Also carries the Liquidity driver now —
+// its real signal (a near-term ATM contract's own daily volume) is a
+// free byproduct of the same option-price fetch this button already
+// makes for IV, not a separate call.
 function applyRealVolatility(o, real) {
   o.price = real.price;
   o.volBias = real.volBias;
@@ -951,8 +954,16 @@ function applyRealVolatility(o, real) {
     historicalVolatilityPct: real.historicalVolatilityPct,
     impliedVolatilityPct: real.impliedVolatilityPct,
     spread: real.spread,
+    optionVolume: real.optionVolume,
+    liquidityScore: real.liquidityScore,
     fetchedAt: real.fetchedAt || nowStamp()
   };
+  if (real.liquidityScore !== null && real.liquidityScore !== undefined) {
+    const idx = o.oppDrivers.findIndex(([name]) => name === "Liquidity");
+    if (idx >= 0) o.oppDrivers[idx] = ["Liquidity", real.liquidityScore];
+    else o.oppDrivers.push(["Liquidity", real.liquidityScore]);
+    o.opportunityScore = computeOpportunityScore(o.oppDrivers);
+  }
   if (!o.pendingAnalysis && o.status !== "Reject") {
     o.tradeConstruction = constructTrade(o);
     o.suggestedTrade = o.tradeConstruction.recommended.name;
@@ -962,12 +973,14 @@ function applyRealVolatility(o, real) {
   o.lastUpdated = nowStamp();
 }
 
-// Pulls real price + real Volatility Bias (IV-vs-HV spread) from the
-// backend for one ticker. Deliberately per-ticker, not automatic —
-// the free Massive tier is 5 calls/min and this endpoint alone makes
-// 3 real calls, so auto-refreshing the whole queue isn't viable.
-// Volatility Score's composite magnitude stays mock; only bias
-// direction and price get replaced with real data here.
+// Pulls real price, real Volatility Bias (IV-vs-HV spread), and the
+// real Liquidity driver (from the same near-term ATM contract's own
+// volume already fetched for IV) from the backend for one ticker.
+// Deliberately per-ticker, not automatic — the free Massive tier is
+// 5 calls/min and this endpoint alone makes 3 real calls, so auto-
+// refreshing the whole queue isn't viable. Volatility Score's
+// composite magnitude itself stays partly mock (see "Get real
+// volatility drivers" for the 5 factors that are real).
 async function fetchRealVolatility(o) {
   const statusEl = document.getElementById("realVolStatus");
   const btn = document.getElementById("fetchRealVolBtn");
@@ -993,7 +1006,7 @@ async function fetchRealVolatility(o) {
     fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ price: o.price, volBias: o.volBias, realVolatility: o.realVolatility })
+      body: JSON.stringify({ price: o.price, volBias: o.volBias, realVolatility: o.realVolatility, oppDrivers: o.oppDrivers })
     }).catch(err => console.warn("Real volatility fetched but failed to sync to backend:", err));
 
     renderQueue();
@@ -2393,7 +2406,7 @@ function renderWorkspace() {
       </div>
       <button class="sim-btn" id="fetchRealVolBtn">${o.realVolatility ? 'Refresh real volatility' : 'Get real volatility'}</button>
       <div id="realVolStatus" class="updated-tag" style="margin-top:8px;"></div>
-      ${o.realVolatility ? `<div class="updated-tag" style="margin-top:6px;">Pulled ${o.realVolatility.fetchedAt}. Price and volatility bias are real — Volatility Score's composite (${o.volatilityScore}) is still mock, since five of its seven factors don't have a real data source wired in yet.</div>` : `<div class="updated-tag" style="margin-top:6px;">Not yet checked against real data — everything below is still illustrative.</div>`}
+      ${o.realVolatility ? `<div class="updated-tag" style="margin-top:6px;">Pulled ${o.realVolatility.fetchedAt}. Price, volatility bias, and the Liquidity driver (contract volume ${o.realVolatility.optionVolume}) are real.</div>` : `<div class="updated-tag" style="margin-top:6px;">Not yet checked against real data — everything below is still illustrative.</div>`}
       <button class="sim-btn" id="fetchRealCatalystBtn" style="margin-top:10px;">${o.realCatalyst ? 'Refresh real catalyst' : 'Get real catalyst'} <span class="driver-group-note">(Finnhub — free tier, 1 call)</span></button>
       <div id="realCatalystStatus" class="updated-tag" style="margin-top:6px;"></div>
       ${o.realCatalyst ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realCatalyst.fetchedAt} — next earnings ${o.realCatalyst.earningsDate}${o.realCatalyst.hour ? ` (${o.realCatalyst.hour.toUpperCase()})` : ''}, ${o.daysToCatalyst}d out. Catalyst strength driver and Conviction's Catalyst sub-factor are now real.</div>` : `<div class="updated-tag" style="margin-top:4px;">Not yet checked — Catalyst strength driver above is still a placeholder.</div>`}
@@ -2733,10 +2746,11 @@ async function deepDiveTopMovers() {
 // mock opportunity, so moving it to Analyzed triggers the same
 // already-tested placeholder-text-and-trade-construction flow.
 // Catalyst strength is real when the deep-dive found an upcoming
-// earnings date (via Finnhub); driver-level Liquidity remains a
-// placeholder — it already passed the dollar-volume filter, so a
-// moderate default is defensible, not a precise measure, and a real
-// per-strike liquidity read belongs to Trade Quality, not here.
+// earnings date (via Finnhub); Liquidity is real too, from the same
+// near-term ATM contract's own volume already fetched for IV — both
+// get overlaid below via their apply* functions once oppDrivers exists.
+// The placeholder values here are just the pre-overlay fallback, same
+// as every other driver this function seeds before real data lands.
 function createOpportunityFromScan(ticker, deepDive) {
   const sector = deepDive.detectedSector || "Diversified";
   const oppDrivers = [
@@ -2780,7 +2794,7 @@ function createOpportunityFromScan(ticker, deepDive) {
   applyRealVolatility(o, {
     price: deepDive.price, volBias: deepDive.volBias,
     historicalVolatilityPct: deepDive.historicalVolatilityPct, impliedVolatilityPct: deepDive.impliedVolatilityPct,
-    spread: deepDive.spread, fetchedAt: nowStamp()
+    spread: deepDive.spread, optionVolume: deepDive.optionVolume, liquidityScore: deepDive.liquidityScore, fetchedAt: nowStamp()
   });
   applyRealTechnicals(o, {
     relativeVolume: deepDive.relativeVolume, relativeVolumeScore: deepDive.relativeVolumeScore,
@@ -3009,6 +3023,8 @@ async function initFromBackend() {
             historicalVolatilityPct: bo.realVolatility.historicalVolatilityPct,
             impliedVolatilityPct: bo.realVolatility.impliedVolatilityPct,
             spread: bo.realVolatility.spread,
+            optionVolume: bo.realVolatility.optionVolume,
+            liquidityScore: bo.realVolatility.liquidityScore,
             fetchedAt: bo.realVolatility.fetchedAt
           });
         }

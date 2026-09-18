@@ -448,6 +448,8 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     contracts = ref_payload.get("results", [])
     iv_pct = None
     option_contract = None
+    option_volume = None
+    liquidity_score = None
     today = date.today()
     candidates = []
     for c in contracts:
@@ -468,6 +470,8 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
             T = (exp_date - today).days / 365.0
             iv_pct = round(implied_vol_bisection(option_price, price, parsed["strike"], T, RISK_FREE_RATE) * 100, 2)
             option_contract = contract_ticker
+            option_volume = opt_results[0].get("v", 0)
+            liquidity_score = compute_liquidity_score(option_volume)
 
     spread = round(iv_pct - hv_pct, 2) if iv_pct is not None else None
     if spread is None:
@@ -533,6 +537,8 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
         "spread": spread,
         "volBias": vol_bias,
         "ivContract": option_contract,
+        "optionVolume": option_volume,
+        "liquidityScore": liquidity_score,
         "relativeVolume": round(rvol, 2),
         "relativeVolumeScore": rvol_score,
         "priceChangePct": ten_day_return_pct,
@@ -819,6 +825,20 @@ def compute_technical_structure(closes):
     return ma_gap_pct, technical_score
 
 
+def compute_liquidity_score(volume):
+    """Coarse options-liquidity read from a single near-term ATM
+    contract's own daily trading volume — the only free liquidity
+    signal Massive's Options Basic tier exposes. Verified live before
+    building this: neither the options reference endpoint nor the
+    aggs/prev bar includes open interest on the free tier — that needs
+    the paid snapshot endpoint. Log-scaled since raw contract volume
+    spans orders of magnitude: 0 contracts -> 10, ~100/day -> ~70,
+    1000+/day -> 95. A coarse tradeability gate, the same role the
+    mock placeholder played — Trade Quality re-checks liquidity at the
+    specific structure and strikes it actually uses."""
+    return max(10, min(95, round(10 + math.log10(volume + 1) * 30)))
+
+
 @app.get("/api/real-iv-check/{ticker}")
 def real_iv_check(ticker: str, session: dict = Depends(require_auth)):
     """Real implied volatility computed by us via Black-Scholes inversion
@@ -863,6 +883,7 @@ def real_iv_check(ticker: str, session: dict = Depends(require_auth)):
     if not opt_results:
         raise HTTPException(status_code=502, detail=f"No price history for contract {contract_ticker}")
     option_market_price = opt_results[0]["c"]
+    option_volume = opt_results[0].get("v", 0)
 
     T = (exp_date - today).days / 365.0
     computed_iv = implied_vol_bisection(option_market_price, underlying_price, parsed["strike"], T, RISK_FREE_RATE)
@@ -876,6 +897,8 @@ def real_iv_check(ticker: str, session: dict = Depends(require_auth)):
         "daysToExpiration": (exp_date - today).days,
         "optionMarketPrice": option_market_price,
         "impliedVolatilityPct": round(computed_iv * 100, 2),
+        "optionVolume": option_volume,
+        "liquidityScore": compute_liquidity_score(option_volume),
         "method": "Black-Scholes inversion on real EOD option price — Options Basic only, no paid tier"
     }
 
@@ -998,7 +1021,9 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
         "ivContract": iv_result["contract"],
         "ivMethod": iv_result["method"],
         "spread": spread,
-        "volBias": bias
+        "volBias": bias,
+        "optionVolume": iv_result["optionVolume"],
+        "liquidityScore": iv_result["liquidityScore"]
     }
 
 
