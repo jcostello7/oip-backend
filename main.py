@@ -731,6 +731,28 @@ def fetch_next_earnings(ticker):
     }
 
 
+def fetch_historical_earnings_surprises(ticker):
+    """Real historical EPS-surprise magnitude via Finnhub's dedicated
+    stock/earnings endpoint — a different, free endpoint from the
+    calendar one used by fetch_next_earnings. Verified live before
+    building this: the calendar endpoint returns nothing for past date
+    ranges on the free tier (forward-looking only), but this endpoint
+    returns Finnhub's own already-computed surprisePercent for the
+    last several reported quarters. Averaged as an unsigned magnitude —
+    same idiom as every other Volatility Score factor: a name that
+    reliably surprises big, in either direction, has more historical
+    catalyst-reaction edge to trade around than one that never
+    surprises. Returns None if no quarters have a surprise figure."""
+    url = f"https://finnhub.io/api/v1/stock/earnings?symbol={ticker.upper()}&token={FINNHUB_API_KEY}"
+    entries = _fetch_finnhub_json(url)
+    surprises = [abs(e["surprisePercent"]) for e in entries if e.get("surprisePercent") is not None]
+    if not surprises:
+        return None
+    avg_surprise_pct = round(sum(surprises) / len(surprises), 2)
+    score = max(10, min(95, round(10 + avg_surprise_pct * 8)))
+    return {"avgSurprisePct": avg_surprise_pct, "quartersUsed": len(surprises), "score": score}
+
+
 @app.get("/api/real-catalyst-check/{ticker}")
 def real_catalyst_check(ticker: str, session: dict = Depends(require_auth)):
     """Real next-earnings date/timing for Catalyst Strength — the
@@ -1029,14 +1051,16 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
 
 @app.get("/api/real-vol-drivers-check/{ticker}")
 def real_vol_drivers_check(ticker: str, sector_etf: Optional[str] = None, session: dict = Depends(require_auth)):
-    """Real data for 5 of Volatility Score's 7 sub-factors — Historical
+    """Real data for 6 of Volatility Score's 7 sub-factors — Historical
     volatility, ATR/recent movement, and Technical structure (all from
     one price-history fetch), IV term structure (a second options
     expiration beyond the near-term ATM contract Volatility Bias
-    already uses), and Sector volatility regime (if sector_etf is
-    given). Catalyst expected move and Historical catalyst reactions
-    are deliberately not here — both need real multi-leg or historical
-    pricing work that's its own scoped item, not a quick add here.
+    already uses), Sector volatility regime (if sector_etf is given),
+    and Historical catalyst reactions (real EPS-surprise history via
+    Finnhub — a separate provider/rate bucket, doesn't count against
+    the Massive budget below). Catalyst expected move is the only one
+    deliberately not here — it needs real multi-leg straddle pricing,
+    its own scoped item, not a quick add.
     Up to 5 real Massive calls total (price history, options reference,
     near-dated option price, far-dated option price, sector ETF price
     history) — fits the 5-calls/min free tier ceiling in one request,
@@ -1157,6 +1181,16 @@ def real_vol_drivers_check(ticker: str, sector_etf: Optional[str] = None, sessio
             stock_hv_pct = annualized_hv_pct(closes)
             sector_vol_regime_score = max(10, min(95, round(50 + abs(stock_hv_pct - sector_hv_pct) * 2)))
 
+    # Historical catalyst reactions — real EPS-surprise history via
+    # Finnhub, a separate provider/rate bucket from everything above,
+    # so this doesn't tighten the Massive call budget this endpoint is
+    # already right up against.
+    historical_reaction = None
+    try:
+        historical_reaction = fetch_historical_earnings_surprises(ticker)
+    except HTTPException:
+        pass
+
     return {
         "ticker": ticker,
         "price": price,
@@ -1167,7 +1201,10 @@ def real_vol_drivers_check(ticker: str, sector_etf: Optional[str] = None, sessio
         "farIvPct": far_iv_pct, "farExpiration": far_expiration,
         "termSlope": term_slope, "termStructureScore": term_structure_score,
         "sectorEtf": sector_etf.upper() if sector_etf else None,
-        "sectorHvPct": sector_hv_pct, "sectorVolRegimeScore": sector_vol_regime_score
+        "sectorHvPct": sector_hv_pct, "sectorVolRegimeScore": sector_vol_regime_score,
+        "avgEpsSurprisePct": historical_reaction["avgSurprisePct"] if historical_reaction else None,
+        "quartersUsed": historical_reaction["quartersUsed"] if historical_reaction else None,
+        "historicalCatalystReactionScore": historical_reaction["score"] if historical_reaction else None
     }
 
 
