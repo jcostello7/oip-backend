@@ -1376,6 +1376,44 @@ async function fetchRealVolDrivers(o) {
   }
 }
 
+// Sequences all five existing "Get real ___" actions for one ticker,
+// one at a time with ~70s waits between — same rate-limit pacing
+// reasoning as Real Scan's deep-dive, applied to a single ticker
+// instead of a batch of scan results. Deliberately reuses the fetch
+// functions themselves rather than duplicating any fetch logic; each
+// one already re-renders the workspace and updates its own status
+// line, so this only needs to track overall progress. Status lives in
+// a keyed object (not a local variable) so it survives the repeated
+// renderWorkspace() calls each step triggers internally, same pattern
+// Real Scan's deepDiveStatus already uses for the same reason. A
+// failed step doesn't abort the sequence — these are five independent
+// data types, so one rate-limit hiccup shouldn't cost the other four.
+async function refreshAllRealData(o) {
+  const steps = [
+    { label: "Volatility (price, bias, Liquidity, expected move)", fn: fetchRealVolatility },
+    { label: "Regime", fn: fetchRealRegime },
+    { label: "Technicals (RVOL, Momentum, Trend, Sector leadership)", fn: fetchRealTechnicals },
+    { label: "Volatility drivers", fn: fetchRealVolDrivers },
+    { label: "Catalyst", fn: fetchRealCatalyst }
+  ];
+  for (let i = 0; i < steps.length; i++) {
+    refreshAllStatusByOpp[o.id] = `Refreshing ${i + 1} of ${steps.length}: ${steps[i].label}…`;
+    renderWorkspace();
+    try {
+      await steps[i].fn(o);
+    } catch (err) {
+      console.warn(`Refresh-all step "${steps[i].label}" failed:`, err);
+    }
+    if (i < steps.length - 1) {
+      refreshAllStatusByOpp[o.id] = "Waiting ~70s before the next step (rate-limit pacing)…";
+      renderWorkspace();
+      await sleep(70000);
+    }
+  }
+  refreshAllStatusByOpp[o.id] = "Full real-data refresh complete.";
+  renderWorkspace();
+}
+
 // Pure mutation logic for a status change — extracted so it's shared
 // between the UI's status dropdown and the startup merge (applying a
 // status that was persisted to the backend on a previous visit needs
@@ -2021,6 +2059,7 @@ let scanViewOpen = false;
 let scanResults = null;
 let deepDiveResults = {};
 let deepDiveStatus = "";
+let refreshAllStatusByOpp = {};
 
 function getJournalDraft(o) {
   if (!journalDraftByOpp[o.id]) {
@@ -2320,7 +2359,7 @@ function journalFormHtml(o) {
   const pnlField = effectiveStatus === "Closed" ? `
     <div class="tc-row">
       <span class="tc-label">Realized P&amp;L</span>
-      <input type="text" class="notes" id="journalPnl" style="min-height:auto; padding:8px 12px;" placeholder="e.g. +320 or -150" value="${draft.realizedPnL}">
+      <input type="text" class="notes" id="journalPnl" style="min-height:auto; padding:8px 12px;" placeholder="Total $ for the whole position, e.g. +320 or -150 (not per-contract)" value="${draft.realizedPnL}">
     </div>` : '';
   const existingTag = o.journalEntryId
     ? `<div class="updated-tag" style="margin-top:8px;">Logged ${(journalEntries.find(e => e.id === o.journalEntryId) || {}).loggedDate || ''}</div>`
@@ -2521,6 +2560,9 @@ function renderWorkspace() {
       <div class="tc-top">
         <span class="tc-name">Real data <span class="driver-group-note">(Massive — free tier, 5 calls/min)</span></span>
       </div>
+      <button class="sim-btn" id="refreshAllRealDataBtn">Refresh all real data <span class="driver-group-note">(~4 min, paced)</span></button>
+      <div class="updated-tag" style="margin-top:6px;">${refreshAllStatusByOpp[o.id] || "Runs all five buttons below in sequence, so you do not have to click and wait on each one separately."}</div>
+      <div style="margin:14px 0; border-top:1px solid var(--border);"></div>
       <button class="sim-btn" id="fetchRealVolBtn">${o.realVolatility ? 'Refresh real volatility' : 'Get real volatility'}</button>
       <div id="realVolStatus" class="updated-tag" style="margin-top:8px;"></div>
       ${o.realVolatility ? `<div class="updated-tag" style="margin-top:6px;">Pulled ${o.realVolatility.fetchedAt}. Price, volatility bias, and Liquidity (contract volume ${o.realVolatility.optionVolume}) are real.${o.realVolatility.impliedMovePct !== null && o.realVolatility.impliedMovePct !== undefined ? ` Real expected move: ${o.realVolatility.impliedMovePct}% implied (ATM straddle) vs ${o.realVolatility.historicalMovePct}% historical — Volatility Score's Catalyst expected move driver is now real too, closing out all 7 factors.` : ' No far-dated put found, so expected move stays a placeholder this time.'}</div>` : `<div class="updated-tag" style="margin-top:6px;">Not yet checked against real data — everything below is still illustrative.</div>`}
@@ -2631,6 +2673,8 @@ function renderWorkspace() {
   if (clearLegsBtn) clearLegsBtn.addEventListener("click", () => { clearCustomLegs(o.id); renderWorkspace(); });
   const ageCatalystBtn = document.getElementById("ageCatalystBtn");
   if (ageCatalystBtn) ageCatalystBtn.addEventListener("click", () => { ageOpportunityCatalyst(o); renderWorkspace(); });
+  const refreshAllRealDataBtn = document.getElementById("refreshAllRealDataBtn");
+  if (refreshAllRealDataBtn) refreshAllRealDataBtn.addEventListener("click", () => refreshAllRealData(o));
   const fetchRealVolBtn = document.getElementById("fetchRealVolBtn");
   if (fetchRealVolBtn) fetchRealVolBtn.addEventListener("click", () => fetchRealVolatility(o));
   const fetchRealRegimeBtn = document.getElementById("fetchRealRegimeBtn");
