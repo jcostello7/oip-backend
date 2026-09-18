@@ -1018,7 +1018,12 @@ def real_vol_drivers_check(ticker: str, sector_etf: Optional[str] = None, sessio
     same reasoning as real_deep_dive."""
     ticker = ticker.upper()
     end = date.today()
-    start = end - timedelta(days=60)
+    # 90 calendar days, not 60 — this endpoint needs at least 45 trading
+    # days (a 41-day long-HV window plus the ATR baseline window), and
+    # 60 calendar days only yields ~40 trading days after weekends and
+    # holidays. The other endpoints' 60-day windows are fine since they
+    # only need ~30 trading days at most.
+    start = end - timedelta(days=90)
     url = (f"https://api.massive.com/v2/aggs/ticker/{ticker}/range/1/day/"
            f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
     payload = _fetch_json(url)
