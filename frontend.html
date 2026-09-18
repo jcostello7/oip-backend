@@ -2715,6 +2715,11 @@ function updateEdgeToggleLabel() {
   if (btn) btn.textContent = edgeViewOpen ? "Back to Queue" : "Edge Analytics";
 }
 
+function updateScanToggleLabel() {
+  const btn = document.getElementById("scanToggleBtn");
+  if (btn) btn.textContent = scanViewOpen ? "Back to Queue" : "Real Scan";
+}
+
 function journalEntryCardHtml(entry) {
   const outcomeColor = entry.outcome === "Win" || entry.outcome === "Good call" ? "var(--positive)"
     : entry.outcome === "Loss" || entry.outcome === "Missed opportunity" ? "var(--negative)"
@@ -3020,6 +3025,7 @@ async function addScanResultToQueue(ticker) {
   scanViewOpen = false;
   document.getElementById("mainLayout").style.display = "flex";
   document.getElementById("scanView").style.display = "none";
+  updateScanToggleLabel();
   renderChips();
   renderQueue();
   renderWorkspace();
@@ -3140,6 +3146,7 @@ document.getElementById("journalToggleBtn").addEventListener("click", () => {
   if (journalViewOpen) renderJournalView();
   updateJournalToggleLabel();
   updateEdgeToggleLabel();
+  updateScanToggleLabel();
 });
 
 document.getElementById("edgeToggleBtn").addEventListener("click", () => {
@@ -3152,6 +3159,7 @@ document.getElementById("edgeToggleBtn").addEventListener("click", () => {
   if (edgeViewOpen) renderEdgeView();
   updateJournalToggleLabel();
   updateEdgeToggleLabel();
+  updateScanToggleLabel();
 });
 
 document.getElementById("scanToggleBtn").addEventListener("click", () => {
@@ -3164,6 +3172,7 @@ document.getElementById("scanToggleBtn").addEventListener("click", () => {
   if (scanViewOpen) renderScanView();
   updateJournalToggleLabel();
   updateEdgeToggleLabel();
+  updateScanToggleLabel();
 });
 
 // Loads persisted state from the backend (status/notes overrides,
@@ -3266,6 +3275,7 @@ async function initFromBackend() {
   renderWorkspace();
   updateJournalToggleLabel();
   updateEdgeToggleLabel();
+  updateScanToggleLabel();
 }
 
 initFromBackend();
