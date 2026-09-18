@@ -1236,6 +1236,81 @@ async function fetchRealCatalyst(o) {
   }
 }
 
+// Pure mutation logic for applying real Volatility Score driver data —
+// same extraction pattern as the other apply* functions. Covers 5 of
+// the 7 volatility sub-factors (Historical volatility, ATR, Technical
+// structure, IV term structure, Sector volatility regime); Catalyst
+// expected move and Historical catalyst reactions stay whatever they
+// were, since nothing here computes them — that's real multi-leg/
+// historical pricing work, its own scoped item, not folded in here.
+function applyRealVolDrivers(o, real) {
+  o.realVolDrivers = { ...real, fetchedAt: real.fetchedAt || nowStamp() };
+
+  const setDriver = (name, val) => {
+    if (val === null || val === undefined) return; // e.g. no far-dated contract found — leave that driver as-is rather than overwrite with a fake value
+    const idx = o.volDrivers.findIndex(([n]) => n === name);
+    if (idx >= 0) o.volDrivers[idx] = [name, val];
+    else o.volDrivers.push([name, val]);
+  };
+  setDriver("Historical volatility", real.historicalVolatilityMagnitudeScore);
+  setDriver("ATR / recent movement", real.atrScore);
+  setDriver("Technical structure", real.technicalStructureScore);
+  setDriver("IV term structure", real.termStructureScore);
+  setDriver("Sector volatility regime", real.sectorVolRegimeScore);
+  o.volatilityScore = computeVolatilityScore(o.volDrivers);
+
+  if (!o.pendingAnalysis && o.status !== "Reject") {
+    o.tradeConstruction = constructTrade(o);
+    o.suggestedTrade = o.tradeConstruction.recommended.name;
+    o.tradeQuality = evaluateTradeQuality(o);
+    o.conviction = evaluateConviction(o);
+  }
+  o.lastUpdated = nowStamp();
+}
+
+// Pulls real data for 5 of Volatility Score's 7 sub-factors from
+// Massive — up to 5 calls in one request (see the endpoint's
+// docstring), so this needs its own free minute, same as Real Scan's
+// deep-dive pacing, and shouldn't be clicked back-to-back with the
+// other "Get real ___" buttons on the same ticker.
+async function fetchRealVolDrivers(o) {
+  const statusEl = document.getElementById("realVolDriversStatus");
+  const btn = document.getElementById("fetchRealVolDriversBtn");
+  if (statusEl) statusEl.textContent = "Fetching real data from Massive…";
+  if (btn) btn.disabled = true;
+
+  try {
+    const sectorTicker = SECTOR_PROXY[o.sector] || "";
+    const url = sectorTicker
+      ? `/api/real-vol-drivers-check/${encodeURIComponent(o.id)}?sector_etf=${encodeURIComponent(sectorTicker)}`
+      : `/api/real-vol-drivers-check/${encodeURIComponent(o.id)}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const detail = err.detail || `Request failed (HTTP ${res.status})`;
+      if (res.status === 429 || detail.includes("429")) {
+        throw new Error("Rate limited by Massive (5 calls/min on the free tier) — wait a moment and try again.");
+      }
+      throw new Error(detail);
+    }
+    const result = await res.json();
+    applyRealVolDrivers(o, result);
+
+    fetch(`/api/opportunities/${encodeURIComponent(o.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volDrivers: o.volDrivers, realVolDrivers: o.realVolDrivers })
+    }).catch(err => console.warn("Real volatility drivers fetched but failed to sync to backend:", err));
+
+    renderQueue();
+    renderWorkspace();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "Failed: " + err.message;
+    if (btn) btn.disabled = false;
+    console.warn("Real volatility drivers fetch failed:", err);
+  }
+}
+
 // Pure mutation logic for a status change — extracted so it's shared
 // between the UI's status dropdown and the startup merge (applying a
 // status that was persisted to the backend on a previous visit needs
@@ -2345,6 +2420,9 @@ function renderWorkspace() {
       ${o.realTechnicals ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realTechnicals.fetchedAt} — real RVOL ${o.realTechnicals.relativeVolume}x, ${o.realTechnicals.priceChangePct >= 0 ? '+' : ''}${o.realTechnicals.priceChangePct}% over 10 trading days${o.realTechnicals.sectorEtf ? ` (vs. ${o.realTechnicals.sectorEtf} ${o.realTechnicals.sectorReturnPct >= 0 ? '+' : ''}${o.realTechnicals.sectorReturnPct}%)` : ''}.</div>` : ''}
       <div class="driver-group-label" style="margin-top:18px;">Volatility Opportunity Engine <span class="driver-group-note">(Section 7 weights)</span></div>
       <div class="drivers">${weightedDriverRows(o.volDrivers, VOL_WEIGHT_MAP, "volatility score")}</div>
+      <button class="sim-btn" id="fetchRealVolDriversBtn" style="margin-top:10px;">${o.realVolDrivers ? 'Refresh real volatility drivers' : 'Get real volatility drivers'} <span class="driver-group-note">(Massive — up to 5 calls)</span></button>
+      <div id="realVolDriversStatus" class="updated-tag" style="margin-top:6px;"></div>
+      ${o.realVolDrivers ? `<div class="updated-tag" style="margin-top:4px;">Pulled ${o.realVolDrivers.fetchedAt} — HV ${o.realVolDrivers.shortHvPct}% (recent) vs ${o.realVolDrivers.longHvPct}% (baseline), ATR ${o.realVolDrivers.recentAtrPct}% vs ${o.realVolDrivers.baselineAtrPct}%${o.realVolDrivers.termStructureScore !== null ? `, IV term ${o.realVolDrivers.nearIvPct}% (${o.realVolDrivers.nearExpiration}) vs ${o.realVolDrivers.farIvPct}% (${o.realVolDrivers.farExpiration})` : ', no far-dated contract found for IV term structure'}${o.realVolDrivers.sectorVolRegimeScore !== null ? `, sector HV ${o.realVolDrivers.sectorHvPct}%` : ''}. 5 of 7 factors above are now real — Catalyst expected move and Historical catalyst reactions remain placeholders.</div>` : `<div class="updated-tag" style="margin-top:4px;">Not yet checked — all 7 factors above are still placeholders.</div>`}
     </section>
 
     <section class="block">
@@ -2417,6 +2495,8 @@ function renderWorkspace() {
   if (fetchRealTechnicalsBtn) fetchRealTechnicalsBtn.addEventListener("click", () => fetchRealTechnicals(o));
   const fetchRealCatalystBtn = document.getElementById("fetchRealCatalystBtn");
   if (fetchRealCatalystBtn) fetchRealCatalystBtn.addEventListener("click", () => fetchRealCatalyst(o));
+  const fetchRealVolDriversBtn = document.getElementById("fetchRealVolDriversBtn");
+  if (fetchRealVolDriversBtn) fetchRealVolDriversBtn.addEventListener("click", () => fetchRealVolDrivers(o));
 
   const journalOutcomeEl = document.getElementById("journalOutcome");
   if (journalOutcomeEl) journalOutcomeEl.addEventListener("change", (e) => { getJournalDraft(o).outcome = e.target.value; });
@@ -2793,6 +2873,7 @@ function hydrateOpportunityFromBackend(bo) {
   if (bo.realCatalyst) {
     applyRealCatalyst(o, { ...bo.realCatalyst, daysToCatalyst: bo.daysToCatalyst });
   }
+  if (bo.realVolDrivers) applyRealVolDrivers(o, bo.realVolDrivers);
 
   if (!o.pendingAnalysis && !o.thesis) {
     o.thesis = "Analysis complete — see the driver breakdown below for the basis of this score.";
@@ -2958,6 +3039,9 @@ async function initFromBackend() {
         }
         if (bo.realCatalyst) {
           applyRealCatalyst(local, { ...bo.realCatalyst, daysToCatalyst: bo.daysToCatalyst });
+        }
+        if (bo.realVolDrivers) {
+          applyRealVolDrivers(local, bo.realVolDrivers);
         }
       });
     }

@@ -263,18 +263,8 @@ def real_technicals_check(ticker: str, sector_etf: Optional[str] = None, session
     momentum_score = max(10, min(95, round(50 + abs(ten_day_return_pct) * 3)))
 
     # Trend/Technical Structure — same closes array, no extra API call.
-    # A clean trend (short MA well separated from long MA) reads as
-    # strong structure regardless of direction; a flat/choppy market
-    # reads as weak — same symmetric-magnitude approach as Momentum.
     # Direction itself is Directional Lean's job elsewhere.
-    if len(closes) >= 30:
-        sma_short = sum(closes[-10:]) / 10
-        sma_long = sum(closes[-30:]) / 30
-        ma_gap_pct = round((sma_short - sma_long) / sma_long * 100, 2)
-        technical_score = max(15, min(95, round(50 + abs(ma_gap_pct) * 10)))
-    else:
-        ma_gap_pct = 0.0
-        technical_score = 50
+    ma_gap_pct, technical_score = compute_technical_structure(closes)
 
     # Sector Leadership — only computed if a sector proxy ETF is given.
     # Same 10-trading-day window as Momentum, so the comparison is
@@ -435,11 +425,7 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     price = closes[-1]
 
     # HV — same formula as hv_check
-    log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
-    n = len(log_returns)
-    mean_return = sum(log_returns) / n
-    variance = sum((r - mean_return) ** 2 for r in log_returns) / (n - 1)
-    hv_pct = round(math.sqrt(variance) * math.sqrt(252) * 100, 2)
+    hv_pct = annualized_hv_pct(closes)
 
     # RVOL, Momentum, Trend — same formulas as real_technicals_check
     latest_volume = volumes[-1]
@@ -452,14 +438,7 @@ def real_deep_dive(ticker: str, sector_etf: Optional[str] = None, session: dict 
     ten_day_return_pct = round(((closes[-1] - closes[-1 - lookback]) / closes[-1 - lookback]) * 100, 2)
     momentum_score = max(10, min(95, round(50 + abs(ten_day_return_pct) * 3)))
 
-    if len(closes) >= 30:
-        sma_short = sum(closes[-10:]) / 10
-        sma_long = sum(closes[-30:]) / 30
-        ma_gap_pct = round((sma_short - sma_long) / sma_long * 100, 2)
-        technical_score = max(15, min(95, round(50 + abs(ma_gap_pct) * 10)))
-    else:
-        ma_gap_pct = 0.0
-        technical_score = 50
+    ma_gap_pct, technical_score = compute_technical_structure(closes)
 
     # IV via Black-Scholes inversion — same as real_iv_check, but reuses
     # `price` above instead of a separate redundant prev-close call
@@ -689,18 +668,13 @@ def hv_check(ticker: str, session: dict = Depends(require_auth)):
         raise HTTPException(status_code=502, detail=f"Not enough price history returned ({len(results)} days) to compute HV")
 
     closes = [bar["c"] for bar in results]
-    log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
-    n = len(log_returns)
-    mean_return = sum(log_returns) / n
-    variance = sum((r - mean_return) ** 2 for r in log_returns) / (n - 1)
-    daily_stdev = math.sqrt(variance)
-    annualized_hv_pct = daily_stdev * math.sqrt(252) * 100
+    hv_pct = annualized_hv_pct(closes)
 
     return {
         "ticker": ticker.upper(),
         "tradingDaysUsed": len(closes),
         "lastClose": closes[-1],
-        "historicalVolatilityPct": round(annualized_hv_pct, 2),
+        "historicalVolatilityPct": hv_pct,
         "note": "Real HV from real price history. This is half of the IV-vs-HV spread — implied volatility still needs the separate Options subscription."
     }
 
@@ -811,6 +785,38 @@ def implied_vol_bisection(market_price, S, K, T, r, tol=1e-6, max_iter=100):
 
 
 RISK_FREE_RATE = 0.045  # approximate — short-dated ATM IV is not very sensitive to this
+
+
+def annualized_hv_pct(closes):
+    """Annualized volatility (stdev of log returns * sqrt(252) * 100)
+    for an arbitrary slice of closes. Originally inlined separately in
+    hv_check and real_deep_dive for one fixed 60-day window each;
+    pulled out so the same formula can also run over shorter/longer
+    windows (a short-vs-long realized-vol comparison) and over a
+    sector proxy's own closes, without a third copy of the same math."""
+    log_returns = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))]
+    n = len(log_returns)
+    mean_return = sum(log_returns) / n
+    variance = sum((r - mean_return) ** 2 for r in log_returns) / (n - 1)
+    return round(math.sqrt(variance) * math.sqrt(252) * 100, 2)
+
+
+def compute_technical_structure(closes):
+    """Trend/Technical Structure score — a clean trend (short MA well
+    separated from long MA) reads as strong structure regardless of
+    direction; a flat/choppy market reads as weak. Shared by
+    real_technicals_check, real_deep_dive, and the volatility drivers
+    endpoint, which each fetch their own closes independently but need
+    the identical reading rather than three slightly-drifting copies."""
+    if len(closes) >= 30:
+        sma_short = sum(closes[-10:]) / 10
+        sma_long = sum(closes[-30:]) / 30
+        ma_gap_pct = round((sma_short - sma_long) / sma_long * 100, 2)
+        technical_score = max(15, min(95, round(50 + abs(ma_gap_pct) * 10)))
+    else:
+        ma_gap_pct = 0.0
+        technical_score = 50
+    return ma_gap_pct, technical_score
 
 
 @app.get("/api/real-iv-check/{ticker}")
@@ -996,6 +1002,145 @@ def vol_bias_check(ticker: str, session: dict = Depends(require_auth)):
     }
 
 
+@app.get("/api/real-vol-drivers-check/{ticker}")
+def real_vol_drivers_check(ticker: str, sector_etf: Optional[str] = None, session: dict = Depends(require_auth)):
+    """Real data for 5 of Volatility Score's 7 sub-factors — Historical
+    volatility, ATR/recent movement, and Technical structure (all from
+    one price-history fetch), IV term structure (a second options
+    expiration beyond the near-term ATM contract Volatility Bias
+    already uses), and Sector volatility regime (if sector_etf is
+    given). Catalyst expected move and Historical catalyst reactions
+    are deliberately not here — both need real multi-leg or historical
+    pricing work that's its own scoped item, not a quick add here.
+    Up to 5 real Massive calls total (price history, options reference,
+    near-dated option price, far-dated option price, sector ETF price
+    history) — fits the 5-calls/min free tier ceiling in one request,
+    same reasoning as real_deep_dive."""
+    ticker = ticker.upper()
+    end = date.today()
+    start = end - timedelta(days=60)
+    url = (f"https://api.massive.com/v2/aggs/ticker/{ticker}/range/1/day/"
+           f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+    payload = _fetch_json(url)
+    results = payload.get("results", [])
+    if len(results) < 45:
+        raise HTTPException(status_code=502, detail=f"Not enough price history for {ticker} to compute volatility drivers")
+
+    closes = [bar["c"] for bar in results]
+    highs = [bar["h"] for bar in results]
+    lows = [bar["l"] for bar in results]
+    price = closes[-1]
+
+    # Historical volatility magnitude — short-window realized vol vs.
+    # its own longer-window baseline. A meaningful divergence either
+    # way (expanding or contracting) is the "opportunity" signal, same
+    # unsigned-magnitude idiom Momentum and Technical Structure use.
+    short_hv = annualized_hv_pct(closes[-11:])
+    long_hv = annualized_hv_pct(closes[-41:])
+    hv_magnitude_score = max(10, min(95, round(50 + abs(short_hv - long_hv) * 3)))
+
+    # ATR / recent movement — true range averaged over the last 14 days
+    # vs. the 26 days before that, expressed as % of price so it's
+    # comparable across tickers at different price levels.
+    true_ranges = [
+        max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        for i in range(1, len(results))
+    ]
+    recent_atr = sum(true_ranges[-14:]) / 14
+    baseline_window = true_ranges[:-14][-26:]
+    baseline_atr = sum(baseline_window) / len(baseline_window) if baseline_window else recent_atr
+    recent_atr_pct = round(recent_atr / price * 100, 2)
+    baseline_atr_pct = round(baseline_atr / price * 100, 2)
+    atr_score = max(10, min(95, round(50 + abs(recent_atr_pct - baseline_atr_pct) * 10)))
+
+    # Technical structure — same shared formula as Opportunity Score's
+    # own driver, computed independently here so this endpoint doesn't
+    # depend on real technicals ever having been separately fetched.
+    ma_gap_pct, technical_score = compute_technical_structure(closes)
+
+    # IV term structure — near-dated ATM IV (same 15-60 day window
+    # Volatility Bias uses) vs. a far-dated ATM IV (90-180 days out).
+    # Backwardation (near richer than far) reads as more support for a
+    # vol-opportunity thesis — a narrow, front-loaded event-risk read —
+    # than an ordinary contango curve does.
+    ref_url = (f"https://api.massive.com/v3/reference/options/contracts"
+               f"?underlying_ticker={ticker}&contract_type=call&limit=1000&apiKey={MASSIVE_API_KEY}")
+    ref_payload = _fetch_json(ref_url)
+    contracts = ref_payload.get("results", [])
+    today = date.today()
+    near_candidates, far_candidates = [], []
+    for c in contracts:
+        parsed = parse_occ_ticker(c["ticker"])
+        if not parsed:
+            continue
+        exp_date = date.fromisoformat(parsed["expiration_date"])
+        days_out = (exp_date - today).days
+        if 15 <= days_out <= 60:
+            near_candidates.append((exp_date, parsed, c["ticker"]))
+        elif 90 <= days_out <= 180:
+            far_candidates.append((exp_date, parsed, c["ticker"]))
+
+    def pick_atm(candidates):
+        if not candidates:
+            return None
+        nearest_exp = min(c[0] for c in candidates)
+        same_exp = [c for c in candidates if c[0] == nearest_exp]
+        return min(same_exp, key=lambda c: abs(c[1]["strike"] - price))
+
+    def contract_iv(picked):
+        exp_date, parsed, contract_ticker = picked
+        opt_payload = _fetch_json(f"https://api.massive.com/v2/aggs/ticker/{contract_ticker}/prev?adjusted=true&apiKey={MASSIVE_API_KEY}")
+        opt_results = opt_payload.get("results", [])
+        if not opt_results:
+            return None, None
+        option_price = opt_results[0]["c"]
+        T = (exp_date - today).days / 365.0
+        iv_pct = round(implied_vol_bisection(option_price, price, parsed["strike"], T, RISK_FREE_RATE) * 100, 2)
+        return iv_pct, parsed["expiration_date"]
+
+    near_picked = pick_atm(near_candidates)
+    far_picked = pick_atm(far_candidates)
+    near_iv_pct, near_expiration = contract_iv(near_picked) if near_picked else (None, None)
+    far_iv_pct, far_expiration = contract_iv(far_picked) if far_picked else (None, None)
+
+    term_slope = None
+    term_structure_score = None
+    if near_iv_pct is not None and far_iv_pct is not None:
+        term_slope = round(near_iv_pct - far_iv_pct, 2)
+        term_structure_score = max(10, min(95, round(50 + term_slope * 3)))
+
+    # Sector volatility regime — the stock's own realized vol against
+    # its sector proxy's, over the same 60-day window. A meaningful
+    # divergence either way is the idiosyncratic-vol signal: is this
+    # name moving more (or less) than the rest of its sector, not just
+    # riding sector-wide volatility.
+    sector_vol_regime_score = None
+    sector_hv_pct = None
+    if sector_etf:
+        sector_payload = _fetch_json(
+            f"https://api.massive.com/v2/aggs/ticker/{sector_etf.upper()}/range/1/day/"
+            f"{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&apiKey={MASSIVE_API_KEY}")
+        sector_results = sector_payload.get("results", [])
+        if len(sector_results) >= 15:
+            sector_closes = [bar["c"] for bar in sector_results]
+            sector_hv_pct = annualized_hv_pct(sector_closes)
+            stock_hv_pct = annualized_hv_pct(closes)
+            sector_vol_regime_score = max(10, min(95, round(50 + abs(stock_hv_pct - sector_hv_pct) * 2)))
+
+    return {
+        "ticker": ticker,
+        "price": price,
+        "shortHvPct": short_hv, "longHvPct": long_hv, "historicalVolatilityMagnitudeScore": hv_magnitude_score,
+        "recentAtrPct": recent_atr_pct, "baselineAtrPct": baseline_atr_pct, "atrScore": atr_score,
+        "maGapPct": ma_gap_pct, "technicalStructureScore": technical_score,
+        "nearIvPct": near_iv_pct, "nearExpiration": near_expiration,
+        "farIvPct": far_iv_pct, "farExpiration": far_expiration,
+        "termSlope": term_slope, "termStructureScore": term_structure_score,
+        "sectorEtf": sector_etf.upper() if sector_etf else None,
+        "sectorHvPct": sector_hv_pct, "sectorVolRegimeScore": sector_vol_regime_score
+    }
+
+
 @app.post("/api/seed")
 def seed(session: dict = Depends(require_auth), db: Session = Depends(get_db)):
     """One-time seed of the same mock data the frontend already trusts.
@@ -1025,6 +1170,7 @@ def migrate_add_real_volatility(session: dict = Depends(require_auth), db: Sessi
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_regime JSON"))
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_technicals JSON"))
     db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_catalyst JSON"))
+    db.execute(text("ALTER TABLE opportunities ADD COLUMN IF NOT EXISTS real_vol_drivers JSON"))
     db.commit()
     return {"migrated": True}
 
@@ -1050,6 +1196,7 @@ class OpportunityCreate(BaseModel):
     realRegime: Optional[dict] = None
     realTechnicals: Optional[dict] = None
     realCatalyst: Optional[dict] = None
+    realVolDrivers: Optional[dict] = None
 
 
 @app.post("/api/opportunities")
@@ -1076,7 +1223,7 @@ def create_opportunity(opp: OpportunityCreate, session: dict = Depends(require_a
         pending_analysis=opp.pendingAnalysis, price=opp.price, days_to_catalyst=opp.daysToCatalyst,
         opp_drivers=opp.oppDrivers, vol_drivers=opp.volDrivers,
         real_volatility=opp.realVolatility, real_regime=opp.realRegime, real_technicals=opp.realTechnicals,
-        real_catalyst=opp.realCatalyst
+        real_catalyst=opp.realCatalyst, real_vol_drivers=opp.realVolDrivers
     )
     db.add(new_opp)
     db.commit()
@@ -1095,7 +1242,7 @@ def list_opportunities(session: dict = Depends(require_auth), db: Session = Depe
             "pendingAnalysis": o.pending_analysis, "price": o.price, "daysToCatalyst": o.days_to_catalyst,
             "oppDrivers": o.opp_drivers, "volDrivers": o.vol_drivers,
             "realVolatility": o.real_volatility, "realRegime": o.real_regime, "realTechnicals": o.real_technicals,
-            "realCatalyst": o.real_catalyst,
+            "realCatalyst": o.real_catalyst, "realVolDrivers": o.real_vol_drivers,
         }
         for o in opps
     ]
@@ -1129,6 +1276,7 @@ class OpportunityUpdate(BaseModel):
     realRegime: Optional[dict] = None
     realTechnicals: Optional[dict] = None
     realCatalyst: Optional[dict] = None
+    realVolDrivers: Optional[dict] = None
 
 
 @app.patch("/api/opportunities/{opp_id}")
@@ -1168,6 +1316,8 @@ def update_opportunity(opp_id: str, update: OpportunityUpdate,
         opp.real_technicals = update.realTechnicals
     if update.realCatalyst is not None:
         opp.real_catalyst = update.realCatalyst
+    if update.realVolDrivers is not None:
+        opp.real_vol_drivers = update.realVolDrivers
     db.commit()
     return {"updated": True, "id": opp_id, "status": opp.status, "notes": opp.notes}
 

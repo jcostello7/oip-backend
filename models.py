@@ -37,6 +37,7 @@ class Opportunity(Base):
     real_regime = Column(JSON, nullable=True)  # {sectorTicker, sectorChangePct, marketTicker, marketChangePct, fetchedAt}
     real_technicals = Column(JSON, nullable=True)  # {relativeVolume, relativeVolumeScore, priceChangePct, momentumScore, fetchedAt}
     real_catalyst = Column(JSON, nullable=True)  # {earningsDate, hour, fetchedAt} — daysToCatalyst itself lives in days_to_catalyst below
+    real_vol_drivers = Column(JSON, nullable=True)  # raw inputs behind 5 of Volatility Score's 7 sub-factors — see real_vol_drivers_check
 
     price = Column(Float)
     historical_move_pct = Column(Float)
