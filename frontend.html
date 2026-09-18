@@ -930,6 +930,38 @@ function evaluateConviction(o) {
   return { scores, notes, composite };
 }
 
+// Decision Card (Section 10) — pure assembly over the four scores that
+// already exist; no new scoring engine, no new data. Deliberately
+// surfaces the WEAKEST of the four, not an average — a chain is only
+// as strong as its weakest link, and averaging would let one great
+// score mask a genuinely disqualifying one. Explicitly does not
+// recommend a trade — that would break the project's core rule that
+// the system explains itself and the human decides; it names which
+// factor to actually go read the breakdown on instead.
+function buildDecisionCard(o) {
+  if (!o.tradeQuality || !o.conviction) return null;
+  const factors = [
+    { label: "Opportunity", value: o.opportunityScore },
+    { label: "Volatility", value: o.volatilityScore },
+    { label: "Trade Quality", value: o.tradeQuality.quality.composite },
+    { label: "Conviction", value: o.conviction.composite }
+  ];
+  const weakest = factors.reduce((a, b) => (b.value < a.value ? b : a));
+  const strongest = factors.reduce((a, b) => (b.value > a.value ? b : a));
+  let readLabel, readCls;
+  if (weakest.value >= 70) {
+    readLabel = "Strong across all four factors";
+    readCls = "normal";
+  } else if (weakest.value >= 55) {
+    readLabel = "Solid, but one factor is worth a closer look";
+    readCls = "watch";
+  } else {
+    readLabel = "A real weak link here — worth reading the full breakdown before acting";
+    readCls = "elevated";
+  }
+  return { factors, weakest, strongest, readLabel, readCls };
+}
+
 // Deterministic, per-opportunity — advances just this ticker's catalyst
 // window, so the decay mechanic can be tested directly instead of waiting
 // on the queue-wide random simulate to happen to land on this one.
@@ -2387,6 +2419,21 @@ function renderWorkspace() {
       </div>`;
   }
 
+  const decisionCard = buildDecisionCard(o);
+  let decisionCardHtml = "";
+  if (decisionCard) {
+    decisionCardHtml = `
+      <div class="trade-card" style="margin-top:0;">
+        <div class="tc-top">
+          <span class="tc-name">Decision Card</span>
+          <span class="regime-flag ${decisionCard.readCls}">${decisionCard.readLabel}</span>
+        </div>
+        <div class="tc-row"><span class="tc-label">Weakest factor</span><div class="tc-why">${decisionCard.weakest.label} at ${decisionCard.weakest.value} — start here if you're skeptical of this setup</div></div>
+        <div class="tc-row"><span class="tc-label">Strongest factor</span><div class="tc-why">${decisionCard.strongest.label} at ${decisionCard.strongest.value}</div></div>
+        <div class="updated-tag" style="margin-top:8px;">A synthesis of the four scores above, nothing more — it doesn't recommend a trade. The driver breakdowns further down are what to actually base a decision on.</div>
+      </div>`;
+  }
+
   ws.innerHTML = `
     <div class="ws-header">
       <div class="ws-ticker-block">
@@ -2422,6 +2469,8 @@ function renderWorkspace() {
         <div class="score-value small">${o.suggestedTrade}</div>
       </div>
     </div>
+
+    ${decisionCardHtml}
 
     <div class="trade-card" style="margin-top:0;">
       <div class="tc-top">
